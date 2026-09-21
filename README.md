@@ -9,20 +9,13 @@ which requires relatively indpendent SNPs. The most used method for this is `pli
 PLINK LD prunning removes correlated SNPs at random, when a block contains several mutually
 redundant SNPs it keeps an arbitrary one — and for a low-coverage
 sample, covering a sparse number sites, that is
-usually not one of the few sites it has data for.
-
-The discarded SNP was interchangeable with the kept one for every
-well-covered sample in the panel, but not for the sparse one, which had data
-at exactly one of them. This matters most for the samples that can least
-afford it — in a real ancient DNA panel, the two sparsest samples were
-carrying ~32k and ~12k SNPs through to ADMIXTURE out of a ~600k pruned
-panel; prioritising them roughly doubled that, with no cost to anyone else.
+usually not one of the few sites it has data for, resulting in an unnecessary loss for ultra-low coverage samples
 
 ## The fix
 
 Do the pruning as a single genome-wide pass, so every LD relationship is
 still evaluated exactly once — but choose SNP within each block toward
-sites covered by the samples you nominate.
+sites covered by the low coverage samples you nominate.
 
 Well-covered samples are unaffected: they had an equivalent marker either
 way. Sparse samples keep substantially more of their real data.
@@ -55,17 +48,6 @@ Sample list files are one sample per line, either `IID` or `FID<TAB>IID`.
 ## Estimate LD from modern samples
 
 Use `--ld-samples` to restrict r² estimation to high-quality modern diploids.
-
-This is not optional book-keeping. Pseudo-haploid ancient calls — a single
-random read reported as a homozygote — systematically distort r². Including
-them attenuates correlations, so genuinely linked SNP pairs fall below the
-threshold and survive pruning, leaving the panel **under-pruned**.
-
-Measured on a real panel of 495 moderns + 628 ancients: estimating LD from
-the full cohort found 3.46M pairs above r²>0.4, while moderns-only found
-5.63M — **63% more real LD**. The panel pruned using the full cohort still
-had 26.5% of its SNPs in LD when re-checked against moderns-only r².
-
 If you omit `--ld-samples` the whole cohort is used and a warning is printed.
 
 ## How it works
@@ -73,12 +55,9 @@ If you omit `--ld-samples` the whole cohort is used and a warning is printed.
 1. **Priority weight** — per-SNP count of non-missing calls among
    `--priority-samples` (0 = not in the pool).
 2. **LD graph** — `plink --r2` on `--ld-samples`, keeping pairs above `--r2`.
-   SNPs monomorphic in `--ld-samples` have undefined r² and are never
-   evaluated (see [What it does not do](#what-it-does-not-do)).
 3. **Greedy selection** — maximal independent set over that graph, visiting
    priority-pool SNPs first (highest weight first, so a SNP covered by more
-   of your nominated samples wins a block over one covered by fewer), then
-   the rest in genomic order. Keep a SNP, block its LD neighbours.
+   of your nominated samples wins a block over one covered by fewer).
 4. **Cleanup** — re-run `plink --r2` on the surviving set and resolve any
    residual conflicts with the same priority-first greedy rule as step 3,
    iterated to convergence.
@@ -87,14 +66,6 @@ Step 4 exists because a single `--r2` pass uses a static window over the
 full marker set, so it misses a small number of long-range pairs that only
 appear once nearby markers have already been dropped. Convergence typically
 takes 3–4 passes and removes <0.5% of markers.
-
-Cleanup deliberately re-runs `--r2` + greedy selection rather than handing
-the residual pairs to `plink --indep-pairwise`: plink's own drop heuristic
-has no notion of the priority pool and can resolve a conflict by dropping
-the priority SNP and keeping the non-priority one, quietly undoing part of
-what step 3 did. Keeping the same priority-aware rule at every stage means a
-priority SNP is never sacrificed for a non-priority one at any point in the
-pipeline.
 
 The output is verified LD-independent *within the `--window` variant-count
 window used throughout* (the same scope PLINK's own `--indep-pairwise`/`--r2`
@@ -110,12 +81,9 @@ Nominating more samples grows the priority pool (a SNP joins as soon as any
 one nominated sample covers it), and past a certain point the pool
 approaches the whole panel — at which point priority-first traversal is
 just genomic order again, and the benefit to any individual sample
-evaporates (nominating a well-covered sample dilutes the low-coverage ones
-already in the list, since it adds no scarcity of its own but crowds the
-pool). Coverage-weighting (a SNP covered by more nominated samples wins a
+decreases. Coverage-weighting (a SNP covered by more nominated samples wins a
 block over one covered by fewer) keeps the tool useful much further into
-this range than a plain "in the pool or not" union would, but the pool
-still eventually saturates. The `[2/5] priority pool: X%` line reports
+this range, but the pool still eventually saturates. The `[2/5] priority pool: X%` line reports
 where you are; above ~70% you'll see a warning, since by then most blocks'
 winners are governed by genomic order rather than priority. Nominate only
 the samples that actually need the help.
@@ -196,7 +164,7 @@ that modern samples are not penalised.
 Expected output:
 
 ```
-sample           baseline       ldprio     change
+sample              plink       ldprio     change
 ancient1                6           35      +483%
 ancient2               13           54      +315%
 ancient3                6           44      +633%
