@@ -393,9 +393,10 @@ def main():
         ld_keep = ["--keep", w("ld.keep")]
         print(f"[3/5] estimating LD from {len(ld_samples):,} samples",
               file=sys.stderr)
-        overlap = {iid for _, iid in priority_samples} & {iid for _, iid in ld_samples}
+        overlap = set(priority_samples) & set(ld_samples)
         if overlap:
-            preview = ", ".join(sorted(overlap)[:5]) + ("..." if len(overlap) > 5 else "")
+            preview = ", ".join(f"{fid}/{iid}" for fid, iid in sorted(overlap)[:5]) + \
+                      ("..." if len(overlap) > 5 else "")
             print(f"      WARNING: {len(overlap)} sample(s) appear in both "
                   f"--priority-samples and --ld-samples: {preview}\n"
                   f"      If these are pseudo-haploid ancient samples this is "
@@ -415,8 +416,9 @@ def main():
     # polymorphic and evaluated but simply have no partner above the r2
     # threshold nearby, which is the normal, correct state for most SNPs in
     # any real panel and must not be confused with "never evaluated").
-    run([args.plink, "--bfile", base, *ld_keep, "--freq", *COMMON_PLINK_FLAGS,
-         "--out", w("modern_freq")], "--freq (monomorphic check)")
+    run([args.plink, "--bfile", base, *ld_keep, "--make-founders", "--freq",
+         *COMMON_PLINK_FLAGS, "--out", w("modern_freq")],
+        "--freq (monomorphic check)")
     monomorphic = set()
     with open(w("modern_freq.frq")) as fh:
         fh.readline()
