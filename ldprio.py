@@ -88,7 +88,7 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 
-__version__ = "1.1"
+__version__ = "1.1.1"
 
 COMMON_PLINK_FLAGS = ["--allow-no-sex", "--allow-extra-chr"]
 POOL_WARN_FRACTION = 0.70
