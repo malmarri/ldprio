@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 440" width="860" height="440" role="img" aria-labelledby="title desc">
+  <title id="title">Which SNP survives LD pruning</title>
+  <desc id="desc">One LD block of five redundant SNPs. Modern samples have calls at all five; the low-coverage ancient sample only at s3. plink keeps s1, so the ancient sample loses its only site in the block; ldprio keeps s3, so it keeps it. Modern samples keep one SNP either way.</desc>
+  <style>
+    svg { --text: #1f2328; --muted: #59636e; --line: #d1d9e0; --cell: #f6f8fa;
+          --call: #1f2328; --ancient: #9a6700; --kept: #0969da; --kept-text: #ffffff;
+          --good: #1a7f37; --bad: #cf222e; }
+    @media (prefers-color-scheme: dark) {
+      svg { --text: #e6edf3; --muted: #9198a1; --line: #3d444d; --cell: #151b23;
+            --call: #e6edf3; --ancient: #d29922; --kept: #4493f8; --kept-text: #0d1117;
+            --good: #3fb950; --bad: #f85149; }
+    }
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--text); }
+    .title { font-size: 17px; font-weight: 600; }
+    .sub { font-size: 13px; fill: var(--muted); }
+    .label { font-size: 14px; font-weight: 600; }
+    .note { font-size: 12px; fill: var(--muted); }
+    .snp { font-size: 13px; font-weight: 600; fill: var(--muted); text-anchor: middle; }
+    .section { font-size: 12px; font-weight: 600; fill: var(--muted); letter-spacing: 0.08em; }
+    .cell { fill: var(--cell); stroke: var(--line); stroke-width: 1; }
+    .empty { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 3; }
+    .kept { fill: var(--kept); }
+    .kept-text { fill: var(--kept-text); font-size: 13px; font-weight: 600; text-anchor: middle; }
+    .dropped { font-size: 13px; fill: var(--muted); text-anchor: middle; }
+    .call { fill: var(--call); }
+    .call-ancient { fill: var(--ancient); }
+    .nocall { fill: none; stroke: var(--line); stroke-width: 1.5; }
+    .rule { stroke: var(--line); stroke-width: 1; }
+    .good { fill: var(--good); font-size: 13px; font-weight: 600; }
+    .bad { fill: var(--bad); font-size: 13px; font-weight: 600; }
+    .result { font-size: 13px; fill: var(--muted); }
+    .ancient-label { fill: var(--ancient); }
+  </style>
+
+  <text class="title" x="20" y="32">One LD block: five SNPs carry the same information, so pruning keeps one</text>
+  <text class="sub" x="20" y="54">Which one is kept makes no difference to modern samples, but decides whether the ancient sample keeps any data here.</text>
+
+  <!-- SNP column headers -->
+  <text class="snp" x="285" y="92">s1</text>
+  <text class="snp" x="365" y="92">s2</text>
+  <text class="snp" x="445" y="92">s3</text>
+  <text class="snp" x="525" y="92">s4</text>
+  <text class="snp" x="605" y="92">s5</text>
+
+  <!-- Row: modern samples -->
+  <text class="label" x="20" y="124">Modern samples</text>
+  <text class="note" x="20" y="142">called at every SNP</text>
+  <rect class="cell" x="250" y="104" width="70" height="44" rx="6"/>
+  <rect class="cell" x="330" y="104" width="70" height="44" rx="6"/>
+  <rect class="cell" x="410" y="104" width="70" height="44" rx="6"/>
+  <rect class="cell" x="490" y="104" width="70" height="44" rx="6"/>
+  <rect class="cell" x="570" y="104" width="70" height="44" rx="6"/>
+  <circle class="call" cx="285" cy="126" r="7"/>
+  <circle class="call" cx="365" cy="126" r="7"/>
+  <circle class="call" cx="445" cy="126" r="7"/>
+  <circle class="call" cx="525" cy="126" r="7"/>
+  <circle class="call" cx="605" cy="126" r="7"/>
+
+  <!-- Row: ancient sample -->
+  <text class="label ancient-label" x="20" y="180">Ancient sample</text>
+  <text class="note" x="20" y="198">low coverage: called at s3 only</text>
+  <rect class="cell" x="250" y="160" width="70" height="44" rx="6"/>
+  <rect class="cell" x="330" y="160" width="70" height="44" rx="6"/>
+  <rect class="cell" x="410" y="160" width="70" height="44" rx="6"/>
+  <rect class="cell" x="490" y="160" width="70" height="44" rx="6"/>
+  <rect class="cell" x="570" y="160" width="70" height="44" rx="6"/>
+  <circle class="nocall" cx="285" cy="182" r="6"/>
+  <circle class="nocall" cx="365" cy="182" r="6"/>
+  <circle class="call-ancient" cx="445" cy="182" r="7"/>
+  <circle class="nocall" cx="525" cy="182" r="6"/>
+  <circle class="nocall" cx="605" cy="182" r="6"/>
+
+  <!-- Legend -->
+  <circle class="call" cx="666" cy="126" r="5"/>
+  <text class="note" x="678" y="130">genotype call</text>
+  <circle class="nocall" cx="666" cy="182" r="5"/>
+  <text class="note" x="678" y="186">no data</text>
+
+  <line class="rule" x1="20" y1="226" x2="840" y2="226"/>
+  <text class="section" x="20" y="252">WHICH SNP SURVIVES PRUNING</text>
+  <text class="section" x="666" y="252">RESULT FOR THIS BLOCK</text>
+
+  <!-- Row: plink -->
+  <text class="label" x="20" y="286">plink --indep-pairwise</text>
+  <text class="note" x="20" y="304">ignores who has data</text>
+  <rect class="kept" x="250" y="266" width="70" height="44" rx="6"/>
+  <text class="kept-text" x="285" y="293">kept</text>
+  <rect class="empty" x="330" y="266" width="70" height="44" rx="6"/>
+  <rect class="empty" x="410" y="266" width="70" height="44" rx="6"/>
+  <rect class="empty" x="490" y="266" width="70" height="44" rx="6"/>
+  <rect class="empty" x="570" y="266" width="70" height="44" rx="6"/>
+  <text class="dropped" x="365" y="293">–</text>
+  <text class="dropped" x="445" y="293">–</text>
+  <text class="dropped" x="525" y="293">–</text>
+  <text class="dropped" x="605" y="293">–</text>
+  <text class="bad" x="666" y="284">Ancient: 0 SNPs</text>
+  <text class="result" x="666" y="303">Modern: 1 SNP</text>
+
+  <!-- Row: ldprio -->
+  <text class="label" x="20" y="342">ldprio</text>
+  <text class="note" x="20" y="360">prefers the ancient sample's site</text>
+  <rect class="empty" x="250" y="322" width="70" height="44" rx="6"/>
+  <rect class="empty" x="330" y="322" width="70" height="44" rx="6"/>
+  <rect class="kept" x="410" y="322" width="70" height="44" rx="6"/>
+  <text class="kept-text" x="445" y="349">kept</text>
+  <rect class="empty" x="490" y="322" width="70" height="44" rx="6"/>
+  <rect class="empty" x="570" y="322" width="70" height="44" rx="6"/>
+  <text class="dropped" x="285" y="349">–</text>
+  <text class="dropped" x="365" y="349">–</text>
+  <text class="dropped" x="525" y="349">–</text>
+  <text class="dropped" x="605" y="349">–</text>
+  <text class="good" x="666" y="340">Ancient: 1 SNP</text>
+  <text class="result" x="666" y="359">Modern: 1 SNP</text>
+
+  <text class="note" x="20" y="402">Repeated over every block in the genome: on the test panel an ancient sample keeps 43 SNPs with ldprio vs 6 with plink,</text>
+  <text class="note" x="20" y="420">while modern samples keep 200 either way.</text>
+</svg>
