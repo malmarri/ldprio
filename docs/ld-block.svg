@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 440" width="860" height="440" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 386" width="860" height="386" role="img" aria-labelledby="title desc">
   <title id="title">Which SNP survives LD pruning</title>
   <desc id="desc">One LD block of five redundant SNPs. Modern samples have calls at all five; the low-coverage ancient sample only at s3. plink keeps s1, so the ancient sample loses its only site in the block; ldprio keeps s3, so it keeps it. Modern samples keep one SNP either way.</desc>
   <style>
@@ -112,6 +112,4 @@
   <text class="good" x="666" y="340">Ancient: 1 SNP</text>
   <text class="result" x="666" y="359">Modern: 1 SNP</text>
 
-  <text class="note" x="20" y="402">Repeated over every block in the genome: on the test panel an ancient sample keeps 43 SNPs with ldprio vs 6 with plink,</text>
-  <text class="note" x="20" y="420">while modern samples keep 200 either way.</text>
 </svg>
