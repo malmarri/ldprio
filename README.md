@@ -5,17 +5,18 @@ LD pruning that prioritizes the SNPs your low-coverage samples actually cover.
 ## The problem
 
 LD pruning is commonly performed for PCA and model-based clustering analysis like ADMIXTURE,
-which requires relatively indpendent SNPs. The most used method for this is `plink --indep-pairwise`.
-PLINK LD prunning removes correlated SNPs at random, when a block contains several mutually
-redundant SNPs it keeps an arbitrary one — and for a low-coverage
-sample, covering a sparse number sites, that is
-usually not one of the few sites it has data for, resulting in an unnecessary loss for ultra-low coverage samples
+which requires relatively independent SNPs. The most used method for this is `plink --indep-pairwise`.
+When a block contains several mutually redundant SNPs, PLINK decides which
+one survives without looking at which samples have data there — and for a
+low-coverage sample, covering a sparse number of sites, the survivor is
+usually not one of the few sites it has data for, resulting in an unnecessary loss for ultra-low coverage samples.
 
 ## The fix
 
 Do the pruning as a single genome-wide pass, so every LD relationship is
-still evaluated exactly once — but choose SNP within each block toward
-sites covered by the low coverage samples you nominate.
+still evaluated exactly once — but choose the SNP within each block toward
+sites covered by the low coverage samples you nominate, and settle
+blocks contested between them by `--weighting`.
 
 Well-covered samples are unaffected: they had an equivalent marker either
 way. Sparse samples keep substantially more of their real data.
@@ -52,12 +53,13 @@ If you omit `--ld-samples` the whole cohort is used and a warning is printed.
 
 ## How it works
 
-1. **Priority weight** — per-SNP count of non-missing calls among
-   `--priority-samples` (0 = not in the pool).
+1. **Priority pool** — every SNP at least one of the `--priority-samples`
+   has a call at.
 2. **LD graph** — `plink --r2` on `--ld-samples`, keeping pairs above `--r2`.
-3. **Greedy selection** — maximal independent set over that graph, visiting
-   priority-pool SNPs first (highest weight first, so a SNP covered by more
-   of your nominated samples wins a block over one covered by fewer).
+3. **Greedy selection** — maximal independent set over that graph: keep a
+   SNP, drop its LD partners. Priority-pool SNPs are visited first, in the
+   order set by `--weighting` (see [Choosing `--weighting`](#choosing---weighting)),
+   then the rest in genomic order.
 4. **Cleanup** — re-run `plink --r2` on the surviving set and resolve any
    residual conflicts with the same priority-first greedy rule as step 3,
    iterated to convergence.
@@ -78,46 +80,82 @@ you can inspect it, but a calling pipeline under `set -e` will stop.
 ### Scaling to more priority samples
 
 Nominating more samples grows the priority pool (a SNP joins as soon as any
-one nominated sample covers it), and past a certain point the pool
-approaches the whole panel — at which point priority-first traversal is
-just genomic order again, and the benefit to any individual sample
-decreases. Coverage-weighting (a SNP covered by more nominated samples wins a
-block over one covered by fewer) keeps the tool useful much further into
-this range, but the pool still eventually saturates. The `[2/5] priority pool: X%` line reports
-where you are; above ~70% you'll see a warning, since by then most blocks'
-winners are governed by genomic order rather than priority. Nominate only
-the samples that actually need the help.
+one nominated sample covers it), so more blocks are contested between
+nominated samples and each one keeps a smaller share of its sites. The
+`[2/5] priority pool: X%` line reports where you are; above ~70% you'll see
+a warning. Nominate only the samples that actually need the help.
 
-Measured by sweeping K (number of nominated low-coverage samples, each at
-~4% coverage) on a 2,000-SNP / 200-block synthetic panel, 200 modern + 100
-low-coverage samples, baseline (plain `plink --indep-pairwise`) `lowcov001`
-= 7 called SNPs out of 200 kept throughout:
+Measured by sweeping K (number of nominated low-coverage samples) on a
+2,000-SNP / 200-block synthetic panel with 200 modern + 100 low-coverage
+samples. "Mean" is the average share of each nominated sample's own calls
+that survive pruning; "fewest" is the fewest SNPs any one nominated sample
+keeps. Every run keeps 200 SNPs (one per block).
 
-| K | pool % of panel | priority retained | `lowcov001` gain vs. plink |
-| ---: | ---: | ---: | ---: |
-| 1 | 4.1% | 82.9% | 9.7× |
-| 5 | 18.4% | 46.3% | 6.1× |
-| 10 | 33.5% | 29.0% | 5.1× |
-| 20 | 57.1% | 17.5% | 3.1× |
-| 50 | 87.3% (warning fires) | 11.5% | 3.1× |
-| 100 | 98.0% (warning fires) | 10.2% | 2.6× |
+Every sample at ~4% coverage (~80 calls each):
 
-Total SNPs kept stays at 200 throughout (one per block) — you never pay for
-this in panel size, prioritisation only changes *which* SNP wins each
-block. But the retention rate drops fast as K grows, and even the single
-tracked sample's own gain over plain `plink` more than halves between K=1
-and K=100 despite that sample's own coverage never changing — it's diluted
-by the other nominated samples, not by anything about itself. Generated by
-`test/make_ksweep_data.py`; seeded, so these numbers are reproducible.
+| K | pool % | plink mean | plink fewest | inverse mean | inverse fewest | fair mean | fair fewest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 4.1% | 8.5% | 7 | 82.9% | 68 | 82.9% | 68 |
+| 5 | 18.4% | 8.5% | 4 | 51.8% | 25 | 50.3% | **39** |
+| 10 | 33.5% | 8.9% | 4 | 39.3% | 23 | 38.5% | **31** |
+| 20 | 57.1% | 9.7% | 4 | 30.1% | 14 | 29.6% | **23** |
+| 50 | 87.3% | 9.7% | 2 | 22.6% | 10 | 21.9% | **15** |
+| 100 | 98.0% | 10.3% | 2 | 18.5% | 7 | 18.0% | **11** |
+
+Coverage varying 0.5–20% between samples (5 to 398 calls each), as in a
+typical ancient-DNA cohort:
+
+| K | pool % | plink mean | plink fewest | inverse mean | inverse fewest | fair mean | fair fewest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 3.2% | 10.8% | 7 | 92.3% | 60 | 92.3% | 60 |
+| 5 | 16.9% | 8.7% | 0 | **70.8%** | **13** | 69.0% | 12 |
+| 10 | 41.0% | 8.5% | 0 | **50.9%** | **13** | 48.2% | 10 |
+| 20 | 68.3% | 8.8% | 0 | **41.3%** | **11** | 38.9% | 8 |
+| 50 | 95.2% | 9.0% | 0 | **31.4%** | 5 | 29.6% | **7** |
+| 100 | 99.9% | 9.2% | 0 | **24.8%** | 2 | 23.0% | **4** |
+
+Generated by `test/run_ksweep.sh`; seeded, so these numbers are
+reproducible.
+
+### Choosing `--weighting`
+
+When several nominated samples cover different SNPs in the same LD block,
+only one SNP survives, so someone loses. `--weighting` decides who:
+
+- **`inverse`** (default) — each SNP scores the sum of 1/(total called SNPs)
+  over the nominated samples covering it, and higher scores win. A sample
+  with 10 calls contributes 0.1 to each of its sites, one with 1,000 calls
+  contributes 0.001, so the sparsest samples win. This maximises the
+  average share of each sample's own data that survives. Weak spot: when
+  coverage is nearly equal, small differences (say 75 vs 94 calls) still
+  rank the samples strictly, so the slightly better-covered one loses most
+  contests.
+- **`fair`** — samples take turns: the one with the fewest SNPs kept so far
+  (sparsest first on ties) keeps its next available site, preferring sites
+  shared with more nominated samples. This evens out the absolute number of
+  SNPs kept per sample, at a small cost in average retention.
+
+Use `inverse` when coverage varies a lot between the samples you nominate
+(the usual ancient-DNA case) and `fair` when they have similar coverage.
+With one nominated sample the two are identical.
+
+An earlier version weighted each SNP by the *number* of nominated samples
+covering it. That let well-covered samples outvote sparse ones: with
+varying coverage the sparsest sample kept 0–3 SNPs at K ≥ 10, barely better
+than plain PLINK, so it is no longer offered.
 
 ### What it does not do
 
 Finding the *maximum* independent set is NP-hard. This is a greedy
 heuristic, as is PLINK's own, so the two land on different valid solutions
-of slightly different size. Do not read a difference in total SNP count
-between `ldprio` and `plink --indep-pairwise` as a gain or a loss — it is an
-artefact of which heuristic you ran. The meaningful number is the retention
-rate *within the priority pool*, which is what the tool actually changes.
+that can differ noticeably in size. On clean, disjoint LD blocks both keep
+one SNP per block. Where LD decays gradually along the chromosome, as in
+real data, `ldprio` kept ~29% more SNPs than `plink --indep-pairwise` on the
+test panel below, and PLINK's own check still found no residual LD in
+either. So the output is as LD-independent as PLINK's by PLINK's own
+criterion, but it is not the same panel: compare samples by their share of
+the panel, not raw SNP counts, or part of the apparent gain is just panel
+size (`test/run_test.sh` reports both).
 
 SNPs monomorphic in `--ld-samples` have undefined r² and PLINK's `--r2`
 simply omits them from its output — `ldprio` cannot evaluate their LD and
@@ -138,11 +176,12 @@ rare or absent in the modern LD-estimation sample are exactly the case.
 | `--window` | 200 | window, in variants |
 | `--step` | 25 | unused (kept for CLI compatibility) — see note below |
 | `--r2` | 0.4 | r² threshold |
+| `--weighting` | `inverse` | how blocks contested between nominated samples are settled: `inverse` or `fair` (see [Choosing `--weighting`](#choosing---weighting)) |
 | `--autosomes-only` | off | restrict to autosomes before pruning |
 | `--make-bed` | off | also write the pruned PLINK fileset |
 | `--max-cleanup` | 10 | cap on cleanup passes |
 | `--keep-intermediates` | off | keep working files (the `.ld` can be ~0.5 GB) |
-| `--plink` | `plink` | plink executable |
+| `--plink` | `plink` | PLINK 1.9 executable (plink2 is not supported) |
 
 Defaults match the Lazaridis et al. 2016 convention (`200 25 0.4`). `--step`
 was only ever consumed by `plink --indep-pairwise`; cleanup no longer uses
@@ -156,30 +195,54 @@ it don't break.
 cd test && ./run_test.sh
 ```
 
-Runs against a synthetic panel (2,000 SNPs in 200 LD blocks of 10; 200 fully
-called modern diploids; 5 pseudo-haploid samples at ~4% coverage) and checks
-that the output is LD-independent, that every priority sample gains, and
-that modern samples are not penalised.
+Runs against two synthetic panels, each with 200 fully called modern
+diploids and 5 pseudo-haploid samples at ~4% coverage:
 
-Expected output:
+- `test_panel`: 2,000 SNPs in 200 disjoint LD blocks of 10
+- `chain_panel`: 3,000 SNPs with LD decaying along each chromosome
+
+Each panel is run with both `--weighting` modes. For each run it checks
+that the output is LD-independent, that every
+priority sample's *share of the panel* grows (so a gain can't come from
+ldprio simply keeping more SNPs), and that modern samples are not penalised.
+
+Expected output with the default `--weighting inverse` (per-panel
+summaries; the `fair` runs print tables in the same format):
 
 ```
-sample              plink       ldprio     change
-ancient1                6           35      +483%
-ancient2               13           54      +315%
-ancient3                6           44      +633%
-ancient4                8           35      +338%
-ancient5               14           43      +207%
-modern(mean)          200          200      +0.0%
+panel size: plink 200 SNPs, ldprio 200 SNPs
+sample           plink   ldprio   change   share-of-panel
+ancient1             6       43    +617%            7.2x
+ancient2            13       30    +131%            2.3x
+ancient3             6       39    +550%            6.5x
+ancient4             8       63    +688%            7.9x
+ancient5            14       36    +157%            2.6x
+modern(mean)       200      200    +0.0%
+
+panel size: plink 475 SNPs, ldprio 611 SNPs
+sample           plink   ldprio   change   share-of-panel
+ancient1            19       66    +247%            2.7x
+ancient2            16       80    +400%            3.9x
+ancient3            24       65    +171%            2.1x
+ancient4            26       97    +273%            2.9x
+ancient5            23       74    +222%            2.5x
+modern(mean)       475      611   +28.6%
 ```
 
-Both panels keep 200 SNPs — one per LD block — and both are LD-clean. The
-difference is entirely in *which* SNP was kept from each block.
+On the block panel the difference is entirely in *which* SNP was kept from
+each block. On the chain panel ldprio also keeps more SNPs overall; the
+share-of-panel column is the gain after allowing for that.
 
-`test/make_test_data.py` regenerates the panel; it is seeded, so the numbers
-above are reproducible.
+`test/make_test_data.py` and `test/make_chain_data.py` regenerate the
+panels; both are seeded, so the numbers above are reproducible.
 
 ## Requirements
 
-Python 3.6+ and PLINK 1.9 on `PATH` (or pass `--plink`). No Python
+Python 3.7+ and PLINK 1.9 on `PATH` (or pass `--plink`). No Python
 dependencies beyond the standard library.
+
+PLINK 2 is not supported: ldprio relies on PLINK 1.9's `--r2` pairwise LD
+report, `--make-founders` and `.frq` output, which PLINK 2 replaces or drops.
+
+`ldprio.py --version` prints the version; releases are tagged on GitHub
+(`v1.1`, …).
