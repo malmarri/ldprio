@@ -202,8 +202,8 @@ def read_ld_graph(ld_path):
     if not os.path.exists(ld_path):
         sys.exit(f"ERROR: expected LD output not found: {ld_path}\n"
                  f"  (plink returned success but produced no --r2 output -- "
-                 f"check that --ld-samples has enough founders/genotyped "
-                 f"samples for this panel)")
+                 f"check that --ld-samples lists enough samples with "
+                 f"genotype calls in this panel)")
     adj = defaultdict(list)
     n_pairs = 0
     with open(ld_path) as fh:

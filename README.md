@@ -51,6 +51,12 @@ Sample list files are one sample per line, either `IID` or `FID<TAB>IID`.
 Use `--ld-samples` to restrict r² estimation to high-quality modern diploids.
 If you omit `--ld-samples` the whole cohort is used and a warning is printed.
 
+Every sample you list is used, even if the `.fam` file records parents for
+it (columns 3–4). By default PLINK quietly leaves such samples out of LD
+estimates; ldprio turns that off so none of your LD samples are dropped.
+Most aDNA and reference panels record no parents (`0 0`), in which case
+this changes nothing.
+
 ## How it works
 
 1. **Priority pool** — every SNP at least one of the `--priority-samples`
@@ -241,8 +247,8 @@ panels; both are seeded, so the numbers above are reproducible.
 Python 3.7+ and PLINK 1.9 on `PATH` (or pass `--plink`). No Python
 dependencies beyond the standard library.
 
-PLINK 2 is not supported: ldprio relies on PLINK 1.9's `--r2` pairwise LD
-report, `--make-founders` and `.frq` output, which PLINK 2 replaces or drops.
+PLINK 2 is not supported: ldprio relies on PLINK 1.9's pairwise LD report
+(`--r2`) and allele-frequency output, which PLINK 2 replaces or drops.
 
 `ldprio.py --version` prints the version; releases are tagged on GitHub
 (`v1.1`, …).
