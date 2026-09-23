@@ -19,14 +19,16 @@ THE FIX
 Do the pruning as one genome-wide pass (so every LD relationship is still
 evaluated exactly once), but bias *which* SNP wins each block toward sites
 covered by the samples you nominate. Everyone else is unaffected -- they had
-an equivalent marker either way. Within the priority pool, a SNP covered by
-more of your nominated samples wins over one covered by fewer -- a plain
-"covered by >=1" union saturates once enough samples are nominated (a SNP
-becomes "in the pool" as soon as any one sample has it, so with many samples
-almost the whole panel ends up in the pool and priority collapses back to
-genomic order); weighting by coverage count keeps the tool useful well past
-that point. With few samples (<=2) this makes no difference -- there's
-nothing to weight yet.
+an equivalent marker either way. Blocks contested between nominated samples
+are settled by --weighting:
+  inverse (default)  each SNP scores the sum of 1/(total called SNPs) over
+                     the nominated samples covering it, so the sparsest
+                     samples win -- best when coverage varies between them.
+  fair               nominated samples take turns: the one with the fewest
+                     SNPs kept so far (sparsest first on ties) keeps its
+                     next available site, preferring sites shared with more
+                     nominated samples -- evens out SNPs kept per sample,
+                     best when coverage is similar.
 
 LD SOURCE
 ---------
@@ -40,15 +42,15 @@ the exact mistake the above guards against.
 
 METHOD
 ------
-  1. priority weight := per-SNP count of --priority-samples with a
-     non-missing call (0 = not in the pool)
+  1. priority pool := SNPs with a non-missing call in at least one
+     --priority-samples sample, ranked per --weighting (see THE FIX)
   2. `plink --r2` on --ld-samples  ->  LD-conflict graph (pairs above --r2).
      SNPs monomorphic in --ld-samples never appear in this graph (undefined
      r2) and so always survive uncontested -- reported separately since this
      disproportionately affects priority-pool SNPs (rare-in-moderns sites
      are exactly what low-coverage ancient samples are likely to carry).
   3. greedy maximal independent set over that graph, visiting priority-pool
-     SNPs first (highest weight first, genomic order breaking ties), then
+     SNPs first (in --weighting order, genomic order breaking ties), then
      the rest in genomic order (keep a SNP, block its LD neighbours)
   4. cleanup passes: re-run `plink --r2` on the surviving set (its window is
      re-anchored each pass, catching long-range pairs the first pass's
@@ -77,11 +79,16 @@ Sample list files: one sample per line, either "IID" or "FID<tab>IID".
 """
 
 import argparse
+import heapq
+import operator
 import os
 import shutil
 import subprocess
 import sys
-from collections import defaultdict
+import tempfile
+from collections import Counter, defaultdict
+
+__version__ = "1.1"
 
 COMMON_PLINK_FLAGS = ["--allow-no-sex", "--allow-extra-chr"]
 POOL_WARN_FRACTION = 0.70
@@ -214,60 +221,122 @@ def read_ld_graph(ld_path):
     return adj, n_pairs
 
 
-def compute_priority_weight(plink, base, priority_keep_path, variants, work):
-    """Per-SNP count of non-missing calls among --priority-samples. Uses
-    --recode A rather than --missing so ties within the priority pool can be
-    broken by how many nominated samples actually cover a SNP, not just
-    whether at least one does -- a plain union saturates once several
-    samples are nominated (a SNP joins the pool as soon as ANY one sample
-    covers it, so the pool balloons toward the whole panel and priority
-    collapses back to genomic order). Columns are mapped to `variants` by
-    position, matching plink's own (preserved) .bim order, rather than by
-    parsing --recode A's '<id>_<allele>' header names."""
-    w = lambda name: os.path.join(work, name)
-    run([plink, "--bfile", base, "--keep", priority_keep_path, "--recode", "A",
-         *COMMON_PLINK_FLAGS, "--out", w("priority_raw")], "priority --recode A")
+def compute_priority(plink, base, priority_keep_path, variants, work,
+                     weighting):
+    """Priority pool from the --priority-samples' calls, keyed by SNP and
+    covering only SNPs at least one of them has called. For "inverse" the
+    value is sum of 1/(sample's total called SNPs) over the samples calling
+    it; for "fair" it is the list of those samples' indices."""
+    prefix = os.path.join(work, "priority")
+    run([plink, "--bfile", base, "--keep", priority_keep_path, "--make-bed",
+         *COMMON_PLINK_FLAGS, "--out", prefix], "priority subset")
 
-    weight = defaultdict(int)
-    with open(w("priority_raw.raw")) as fh:
-        header = fh.readline().split()
-        n_snp_cols = len(header) - 6
-        if n_snp_cols != len(variants):
-            sys.exit(f"ERROR: --recode A produced {n_snp_cols} SNP columns, "
-                     f"expected {len(variants)} -- unexpected plink output "
-                     f"format (--recode A header/column mismatch)")
-        for line in fh:
-            calls = line.split()[6:]
-            for snp, call in zip(variants, calls):
-                if call != "NA":
-                    weight[snp] += 1
-    return weight
+    with open(prefix + ".fam") as fh:
+        iids = [ln.split()[1] for ln in fh if ln.strip()]
+    n = len(iids)
+    rec = (n + 3) // 4
+    with open(prefix + ".bed", "rb") as fh:
+        raw = fh.read()
+    if raw[:3] != b"\x6c\x1b\x01":
+        sys.exit(f"ERROR: {prefix}.bed is not a SNP-major PLINK 1 .bed")
+    data = raw[3:]
+    if len(data) != rec * len(variants):
+        sys.exit(f"ERROR: {prefix}.bed has {len(data)} genotype bytes, "
+                 f"expected {rec * len(variants)}")
+
+    # .bed packs 4 samples per byte, 2 bits each, low bits first; 0b01 = missing.
+    # Padding slots past the last sample are excluded.
+    def called_slots(p, b):
+        return [j for j in range(4)
+                if 4 * p + j < n and (b >> (2 * j)) & 3 != 1]
+
+    coverage = [0] * n
+    for p in range(rec):
+        for b, count in Counter(data[p::rec]).items():
+            for j in called_slots(p, b):
+                coverage[4 * p + j] += count
+
+    empty = [iids[i] for i in range(n) if coverage[i] == 0]
+    if empty:
+        preview = ", ".join(empty[:5]) + ("..." if len(empty) > 5 else "")
+        print(f"      WARNING: {len(empty)} priority sample(s) have no calls "
+              f"in this panel: {preview}", file=sys.stderr)
+
+    if weighting == "fair":
+        slots = [[[4 * p + j for j in called_slots(p, b)] for b in range(256)]
+                 for p in range(rec)]
+        cover = {}
+        for k, snp in enumerate(variants):
+            off = k * rec
+            samples = [i for p in range(rec) for i in slots[p][data[off + p]]]
+            if samples:
+                cover[snp] = samples
+        return cover
+
+    inv = [1.0 / c if c else 0.0 for c in coverage]
+    weights = [0.0] * len(variants)
+    for p in range(rec):
+        table = [sum(inv[4 * p + j] for j in called_slots(p, b))
+                 for b in range(256)]
+        weights = list(map(operator.add, weights,
+                           map(table.__getitem__, data[p::rec])))
+    return {snp: wt for snp, wt in zip(variants, weights) if wt > 0}
 
 
-def greedy_select(order, adj, priority_weight):
-    """Maximal independent set over the LD graph in `adj`. Visits SNPs with
-    priority_weight > 0 first (highest weight first; ties keep `order`'s
-    order via Python's stable sort), then the rest in `order`'s order. Keep
-    a SNP, block its LD neighbours. Returns kept SNPs in `order`'s order."""
-    if priority_weight:
-        prio = [s for s in order if priority_weight.get(s, 0) > 0]
-        prio.sort(key=lambda s: -priority_weight[s])
-        rest = [s for s in order if priority_weight.get(s, 0) == 0]
-        visit = prio + rest
-    else:
-        visit = order
-
+def greedy_select(order, adj, priority, weighting):
+    """Maximal independent set over the LD graph in `adj`: keep a SNP, block
+    its LD neighbours. Priority-pool SNPs go first -- highest weight first
+    ("inverse"), or by turns to the sample with the fewest SNPs kept so far
+    ("fair") -- then the rest in `order`'s order. Returns kept SNPs in
+    `order`'s order."""
     blocked, kept_set = set(), set()
-    for snp in visit:
-        if snp in blocked:
-            continue
+
+    def keep(snp):
         kept_set.add(snp)
         blocked.update(adj.get(snp, ()))
+
+    if weighting == "fair":
+        index = {snp: k for k, snp in enumerate(order)}
+        queues = defaultdict(list)
+        for snp in order:
+            for i in priority.get(snp, ()):
+                queues[i].append(snp)
+        for q in queues.values():
+            # popped from the end: most-shared first, then genomic order
+            q.sort(key=lambda snp: (len(priority[snp]), -index[snp]))
+        n_kept = defaultdict(int)
+        turns = [(0, len(q), i) for i, q in queues.items()]
+        heapq.heapify(turns)
+        while turns:
+            n, size, i = heapq.heappop(turns)
+            if n != n_kept[i]:
+                heapq.heappush(turns, (n_kept[i], size, i))
+                continue
+            q = queues[i]
+            while q and (q[-1] in blocked or q[-1] in kept_set):
+                q.pop()
+            if not q:
+                continue
+            snp = q.pop()
+            keep(snp)
+            for j in priority[snp]:
+                n_kept[j] += 1
+            heapq.heappush(turns, (n_kept[i], size, i))
+    else:
+        pool = sorted((snp for snp in order if snp in priority),
+                      key=lambda snp: -priority[snp])
+        for snp in pool:
+            if snp not in blocked:
+                keep(snp)
+
+    for snp in order:
+        if snp not in priority and snp not in blocked:
+            keep(snp)
     return [s for s in order if s in kept_set]
 
 
 def r2_and_select(plink, base, snplist_path, ld_keep, window, r2,
-                   priority_weight, work, tag):
+                   priority, weighting, work, tag):
     """One priority-aware LD-resolution pass: --r2 on the current surviving
     set, then greedy-select over whatever conflicts it finds. Returns
     (new_snplist_path, n_pairs_found, n_removed)."""
@@ -287,7 +356,7 @@ def r2_and_select(plink, base, snplist_path, ld_keep, window, r2,
     if n_pairs == 0:
         return snplist_path, 0, 0
 
-    kept = greedy_select(order, adj, priority_weight)
+    kept = greedy_select(order, adj, priority, weighting)
     n_removed = len(order) - len(kept)
     out_path = w(f"{tag}.snplist")
     with open(out_path, "w") as fh:
@@ -318,6 +387,13 @@ def main():
                          "CLI compatibility only; has no effect.")
     ap.add_argument("--r2", type=float, default=0.4,
                     help="r^2 threshold (default: 0.4)")
+    ap.add_argument("--weighting", choices=("inverse", "fair"),
+                    default="inverse",
+                    help="how blocks contested between nominated samples are "
+                         "settled: 'inverse' favours the sparsest samples "
+                         "(best when coverage varies between them); 'fair' "
+                         "evens out SNPs kept per sample (best when coverage "
+                         "is similar). Default: inverse")
     ap.add_argument("--autosomes-only", action="store_true",
                     help="restrict to autosomes before pruning")
     ap.add_argument("--make-bed", action="store_true",
@@ -326,7 +402,10 @@ def main():
                     help="cap on cleanup passes (default: 10)")
     ap.add_argument("--keep-intermediates", action="store_true",
                     help="keep working files (the .ld file can be ~0.5GB)")
-    ap.add_argument("--plink", default="plink", help="plink executable")
+    ap.add_argument("--plink", default="plink",
+                    help="PLINK 1.9 executable (plink2 is not supported)")
+    ap.add_argument("--version", action="version",
+                    version=f"ldprio {__version__}")
     args = ap.parse_args()
 
     if not (0 < args.r2 <= 1):
@@ -345,9 +424,23 @@ def main():
         sys.exit("ERROR: --out prefix cannot match --bfile prefix "
                  "(plink refuses identical input/output filesets)")
 
-    work = args.out + ".tmp"
-    shutil.rmtree(work, ignore_errors=True)  # never start from a prior run's leftovers
-    os.makedirs(work)
+    out_dir = os.path.dirname(os.path.abspath(args.out))
+    os.makedirs(out_dir, exist_ok=True)
+    work = tempfile.mkdtemp(prefix=os.path.basename(args.out) + ".",
+                            suffix=".tmp", dir=out_dir)
+    try:
+        converged = prune(args, work)
+    finally:
+        if args.keep_intermediates:
+            print(f"      intermediates kept in {work}/", file=sys.stderr)
+        else:
+            shutil.rmtree(work, ignore_errors=True)
+    if not converged:
+        sys.exit(1)
+
+
+def prune(args, work):
+    """Run the pipeline in `work`; returns whether cleanup converged."""
     w = lambda name: os.path.join(work, name)
 
     fam_by_iid, fam_pairs, n_fam = read_fam(args.bfile + ".fam")
@@ -363,26 +456,28 @@ def main():
     n_snps = len(variants)
     if n_snps == 0:
         sys.exit("ERROR: input panel contains 0 variants")
+    print(f"ldprio {__version__}", file=sys.stderr)
     print(f"[1/5] input: {n_snps:,} SNPs, {n_fam:,} samples", file=sys.stderr)
 
     # ---- priority pool -------------------------------------------------------
     priority_samples = resolve_samples(args.priority_samples, fam_by_iid,
                                        fam_pairs, "--priority-samples")
     write_keep(priority_samples, w("priority.keep"))
-    priority_weight = compute_priority_weight(args.plink, base, w("priority.keep"),
-                                              variants, work)
-    if not priority_weight:
+    priority = compute_priority(args.plink, base, w("priority.keep"),
+                                variants, work, args.weighting)
+    if not priority:
         sys.exit("ERROR: priority samples cover no SNPs in this panel")
-    pool_frac = len(priority_weight) / n_snps
-    print(f"[2/5] priority pool: {len(priority_weight):,} SNPs covered by the "
+    pool_frac = len(priority) / n_snps
+    print(f"[2/5] priority pool: {len(priority):,} SNPs covered by the "
           f"nominated samples ({pool_frac:.1%} of panel, "
-          f"{len(priority_samples)} sample(s))", file=sys.stderr)
+          f"{len(priority_samples)} sample(s), {args.weighting} "
+          f"weighting)", file=sys.stderr)
     if pool_frac > POOL_WARN_FRACTION:
         print(f"      WARNING: priority pool is {pool_frac:.0%} of the panel. "
-              f"Above ~70% the priority-pool traversal is close to plain "
-              f"genomic order for most blocks and stops helping the samples "
-              f"you nominated -- consider nominating fewer/only the samples "
-              f"that actually need it.", file=sys.stderr)
+              f"Most blocks are now contested between nominated samples, so "
+              f"each keeps a smaller share of its sites -- consider "
+              f"nominating only the samples that actually need it.",
+              file=sys.stderr)
 
     # ---- LD samples ------------------------------------------------------------
     ld_keep = []
@@ -426,10 +521,10 @@ def main():
             f = line.split()
             if len(f) >= 5 and f[4] == "0":
                 monomorphic.add(f[1])
-    unevaluated_priority = [s for s in priority_weight if s in monomorphic]
+    unevaluated_priority = [s for s in priority if s in monomorphic]
     if unevaluated_priority:
-        frac = len(unevaluated_priority) / len(priority_weight)
-        print(f"      note: {len(unevaluated_priority):,}/{len(priority_weight):,} "
+        frac = len(unevaluated_priority) / len(priority)
+        print(f"      note: {len(unevaluated_priority):,}/{len(priority):,} "
               f"({frac:.1%}) priority-pool SNPs are monomorphic in --ld-samples "
               f"and were never evaluated for LD (always kept; may still be "
               f"correlated with each other among the samples that matter for "
@@ -445,15 +540,15 @@ def main():
 
     adj, n_pairs = read_ld_graph(w("ld.ld"))
 
-    kept = greedy_select(variants, adj, priority_weight)
+    kept = greedy_select(variants, adj, priority, args.weighting)
     current_snplist = w("greedy.snplist")
     with open(current_snplist, "w") as fh:
         fh.writelines(s + "\n" for s in kept)
-    n_prio_after_greedy = sum(1 for s in kept if priority_weight.get(s, 0) > 0)
+    n_prio_after_greedy = sum(1 for s in kept if s in priority)
     print(f"[4/5] LD pairs above r2>{args.r2}: {n_pairs:,} | greedy kept "
           f"{len(kept):,} SNPs | priority retained "
-          f"{n_prio_after_greedy:,}/{len(priority_weight):,} "
-          f"({n_prio_after_greedy / len(priority_weight):.1%})", file=sys.stderr)
+          f"{n_prio_after_greedy:,}/{len(priority):,} "
+          f"({n_prio_after_greedy / len(priority):.1%})", file=sys.stderr)
 
     # ---- cleanup passes to convergence, still priority-aware -----------------
     # Re-runs --r2 on the surviving set each pass (its window is re-anchored
@@ -466,7 +561,7 @@ def main():
     for i in range(1, args.max_cleanup + 1):
         current_snplist, n_pairs_i, n_removed = r2_and_select(
             args.plink, base, current_snplist, ld_keep, args.window,
-            args.r2, priority_weight, work, f"chk{i}")
+            args.r2, priority, args.weighting, work, f"chk{i}")
         n_keep = sum(1 for _ in open(current_snplist))
         print(f"      cleanup pass {i}: {n_pairs_i:,} residual pairs, "
               f"removed {n_removed:,} -> {n_keep:,} SNPs", file=sys.stderr)
@@ -485,11 +580,11 @@ def main():
         fh.writelines(s + "\n" for s in final)
 
     final_set = set(final)
-    n_prio_final = sum(1 for s in final_set if priority_weight.get(s, 0) > 0)
+    n_prio_final = sum(1 for s in final_set if s in priority)
     print(f"[5/5] final: {len(final):,} SNPs "
           f"({'LD-independent, verified' if converged else 'NOT verified'}) | "
-          f"priority retained {n_prio_final:,}/{len(priority_weight):,} "
-          f"({n_prio_final / len(priority_weight):.1%})", file=sys.stderr)
+          f"priority retained {n_prio_final:,}/{len(priority):,} "
+          f"({n_prio_final / len(priority):.1%})", file=sys.stderr)
     print(f"      wrote {args.out}.snplist", file=sys.stderr)
 
     if args.make_bed:
@@ -498,13 +593,7 @@ def main():
             "final --make-bed")
         print(f"      wrote {args.out}.{{bed,bim,fam}}", file=sys.stderr)
 
-    if not args.keep_intermediates:
-        shutil.rmtree(work, ignore_errors=True)
-    else:
-        print(f"      intermediates kept in {work}/", file=sys.stderr)
-
-    if not converged:
-        sys.exit(1)
+    return converged
 
 
 if __name__ == "__main__":

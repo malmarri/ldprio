@@ -11,10 +11,15 @@ ksweep.ped/.map, ld_samples.txt, and one priority_K<N>.txt per K in
 [1, 5, 10, 20, 50, 100] (each the first N of the 100 low-coverage samples,
 so every larger K's list is a superset of every smaller one's).
 
-run_ksweep.sh converts ksweep.ped/.map to PLINK binary and runs the sweep.
+Optional argument "varying" draws each low-coverage sample's coverage
+log-uniformly from 0.5% to 20% instead of a flat 4%, as in real ancient-DNA
+cohorts. run_ksweep.sh converts ksweep.ped/.map to PLINK binary and runs the
+sweep in both modes.
 """
 
+import math
 import random
+import sys
 
 random.seed(20260921)
 
@@ -48,11 +53,17 @@ for b in range(N_BLOCKS):
                 modern_rows[i][col] = (draw_genotype(freq)
                                        if random.random() < FLIP_RATE else g)
 
+if len(sys.argv) > 1 and sys.argv[1] == "varying":
+    coverages = [math.exp(random.uniform(math.log(0.005), math.log(0.2)))
+                 for _ in range(N_LOWCOV)]
+else:
+    coverages = [LOWCOV_COVERAGE] * N_LOWCOV
+
 lowcov_rows = []
 for a in range(N_LOWCOV):
     row = [None] * N_SNPS
     for col in range(N_SNPS):
-        if random.random() < LOWCOV_COVERAGE:
+        if random.random() < coverages[a]:
             row[col] = 0 if random.random() < 0.5 else 2   # pseudo-haploid
     lowcov_rows.append(row)
 
