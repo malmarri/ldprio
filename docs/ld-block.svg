@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 386" width="860" height="386" role="img" aria-labelledby="title desc">
   <title id="title">Which SNP survives LD pruning</title>
-  <desc id="desc">One LD block of five redundant SNPs. Modern samples have calls at all five; the low-coverage ancient sample only at s3. plink keeps s1, so the ancient sample loses its only site in the block; ldprio keeps s3, so it keeps it. Modern samples keep one SNP either way.</desc>
+  <desc id="desc">One LD block of five redundant SNPs. High coverage samples have calls at all five; the low-coverage ancient sample only at s3. plink keeps s1, so the ancient sample loses its only site in the block; ldprio keeps s3, so it keeps it. High coverage samples keep one SNP either way.</desc>
   <style>
     svg { --text: #1f2328; --muted: #59636e; --line: #d1d9e0; --cell: #f6f8fa;
           --call: #1f2328; --ancient: #9a6700; --kept: #0969da; --kept-text: #ffffff;
@@ -33,7 +33,7 @@
   </style>
 
   <text class="title" x="20" y="32">One LD block: five SNPs carry the same information, so pruning keeps one</text>
-  <text class="sub" x="20" y="54">Which one is kept makes no difference to modern samples, but decides whether the ancient sample keeps any data here.</text>
+  <text class="sub" x="20" y="54">Which one is kept makes no difference to high coverage samples, but decides whether the ancient sample keeps any data here.</text>
 
   <!-- SNP column headers -->
   <text class="snp" x="285" y="92">s1</text>
@@ -42,8 +42,8 @@
   <text class="snp" x="525" y="92">s4</text>
   <text class="snp" x="605" y="92">s5</text>
 
-  <!-- Row: modern samples -->
-  <text class="label" x="20" y="124">Modern samples</text>
+  <!-- Row: high coverage samples -->
+  <text class="label" x="20" y="124">High coverage samples</text>
   <text class="note" x="20" y="142">called at every SNP</text>
   <rect class="cell" x="250" y="104" width="70" height="44" rx="6"/>
   <rect class="cell" x="330" y="104" width="70" height="44" rx="6"/>
@@ -94,7 +94,7 @@
   <text class="dropped" x="525" y="293">–</text>
   <text class="dropped" x="605" y="293">–</text>
   <text class="bad" x="666" y="284">Ancient: 0 SNPs</text>
-  <text class="result" x="666" y="303">Modern: 1 SNP</text>
+  <text class="result" x="666" y="303">High coverage: 1 SNP</text>
 
   <!-- Row: ldprio -->
   <text class="label" x="20" y="342">ldprio</text>
@@ -110,6 +110,6 @@
   <text class="dropped" x="525" y="349">–</text>
   <text class="dropped" x="605" y="349">–</text>
   <text class="good" x="666" y="340">Ancient: 1 SNP</text>
-  <text class="result" x="666" y="359">Modern: 1 SNP</text>
+  <text class="result" x="666" y="359">High coverage: 1 SNP</text>
 
 </svg>

@@ -22,7 +22,7 @@ Well-covered samples are unaffected: they had an equivalent marker either
 way. Sparse samples keep substantially more of their real data.
 
 <p align="center">
-  <img src="docs/ld-block.svg" alt="One LD block of five redundant SNPs: modern samples have calls at all five, the ancient sample only at s3. plink keeps s1, leaving the ancient sample with no SNP from this block; ldprio keeps s3, so the ancient sample keeps its site. Modern samples keep one SNP either way." width="860">
+  <img src="docs/ld-block.svg" alt="One LD block of five redundant SNPs: high coverage samples have calls at all five, the ancient sample only at s3. plink keeps s1, leaving the ancient sample with no SNP from this block; ldprio keeps s3, so the ancient sample keeps its site. High coverage samples keep one SNP either way." width="860">
 </p>
 
 ## Quick start
