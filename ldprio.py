@@ -33,7 +33,8 @@ are settled by --weighting:
 LD SOURCE
 ---------
 LD is estimated only from the samples given by --ld-samples, which should be
-high-quality modern diploids. Pseudo-haploid ancient calls (a single random
+high-quality samples with reliable diploid calls -- modern, or high-coverage
+ancient. Pseudo-haploid ancient calls (a single random
 read reported as a homozygote) systematically distort r2 downward, so
 including them hides real LD and leaves the panel under-pruned. If you omit
 --ld-samples the whole cohort is used and a warning is printed. If a
@@ -70,12 +71,13 @@ EXAMPLE
 -------
   ldprio.py \\
       --bfile data/panel_qc \\
-      --priority-samples low_coverage.txt \\
-      --ld-samples moderns.txt \\
-      --autosomes-only --make-bed \\
+      --priority-samples priority_samples.txt \\
+      --ld-samples calculate_ld_samples.txt \\
+      --make-bed \\
       --out data/panel_pruned
 
 Sample list files: one sample per line, either "IID" or "FID<tab>IID".
+Only autosomes (chromosomes 1-22) are pruned and written out.
 """
 
 import argparse
@@ -88,7 +90,7 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 
-__version__ = "1.1.1"
+__version__ = "1.2"
 
 COMMON_PLINK_FLAGS = ["--allow-no-sex", "--allow-extra-chr"]
 POOL_WARN_FRACTION = 0.70
@@ -376,8 +378,9 @@ def main():
                     help="samples whose covered SNPs should be favoured")
     ap.add_argument("--ld-samples",
                     help="samples LD is estimated from (use high-quality "
-                         "modern diploids; default: whole cohort, with a "
-                         "warning)")
+                         "samples with reliable diploid calls, modern or "
+                         "high-coverage ancient; default: whole cohort, "
+                         "with a warning)")
     ap.add_argument("--window", type=int, default=200,
                     help="window in variants (default: 200)")
     ap.add_argument("--step", type=int, default=25,
@@ -394,8 +397,6 @@ def main():
                          "(best when coverage varies between them); 'fair' "
                          "evens out SNPs kept per sample (best when coverage "
                          "is similar). Default: inverse")
-    ap.add_argument("--autosomes-only", action="store_true",
-                    help="restrict to autosomes before pruning")
     ap.add_argument("--make-bed", action="store_true",
                     help="also write the pruned PLINK fileset")
     ap.add_argument("--max-cleanup", type=int, default=10,
@@ -446,18 +447,29 @@ def prune(args, work):
     fam_by_iid, fam_pairs, n_fam = read_fam(args.bfile + ".fam")
     base = args.bfile
 
-    # ---- optional autosome restriction -------------------------------------
-    if args.autosomes_only:
-        run([args.plink, "--bfile", base, "--autosome", "--make-bed",
-             *COMMON_PLINK_FLAGS, "--out", w("auto")], "autosome subset")
-        base = w("auto")
+    autosomes = {str(c) for c in range(1, 23)}
+    n_input = n_auto = 0
+    with open(args.bfile + ".bim") as fh:
+        for ln in fh:
+            f = ln.split()
+            if f:
+                n_input += 1
+                chrom = f[0].lower()
+                n_auto += (chrom[3:] if chrom.startswith("chr") else chrom) in autosomes
+    if n_auto == 0:
+        sys.exit("ERROR: input panel has no autosomal SNPs (chromosomes 1-22)")
+    run([args.plink, "--bfile", base, "--autosome", "--make-bed",
+         *COMMON_PLINK_FLAGS, "--out", w("auto")], "autosome subset")
+    base = w("auto")
 
     variants = read_bim_variants(base + ".bim")
     n_snps = len(variants)
     if n_snps == 0:
-        sys.exit("ERROR: input panel contains 0 variants")
+        sys.exit("ERROR: input panel has no autosomal SNPs (chromosomes 1-22)")
     print(f"ldprio {__version__}", file=sys.stderr)
-    print(f"[1/5] input: {n_snps:,} SNPs, {n_fam:,} samples", file=sys.stderr)
+    print(f"[1/5] input: {n_snps:,} autosomal SNPs "
+          f"({n_input - n_snps:,} non-autosomal dropped), {n_fam:,} samples",
+          file=sys.stderr)
 
     # ---- priority pool -------------------------------------------------------
     priority_samples = resolve_samples(args.priority_samples, fam_by_iid,

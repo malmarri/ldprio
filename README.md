@@ -30,9 +30,9 @@ way. Sparse samples keep substantially more of their real data.
 ```bash
 ldprio.py \
     --bfile panel_qc \
-    --priority-samples low_coverage_samples.txt \
-    --ld-samples modern_samples.txt \
-    --autosomes-only --make-bed \
+    --priority-samples priority_samples.txt \
+    --ld-samples calculate_ld_samples.txt \
+    --make-bed \
     --out panel_pruned
 ```
 
@@ -40,9 +40,14 @@ Writes `panel_pruned.snplist` (and `.bed/.bim/.fam` with `--make-bed`).
 
 Sample list files are one sample per line, either `IID` or `FID<TAB>IID`.
 
-## Estimate LD from modern samples
+Only autosomes (chromosomes 1–22) are pruned and written out; X, Y,
+mitochondrial and unplaced contigs are dropped.
 
-Use `--ld-samples` to restrict r² estimation to high-quality modern diploids.
+## Choosing the LD samples
+
+Use `--ld-samples` to restrict r² estimation to high-quality samples with
+reliable diploid calls: modern samples, or high-coverage ancient ones. Leave
+out pseudo-haploid samples, whose calls make LD look weaker than it is.
 If you omit `--ld-samples` the whole cohort is used and a warning is printed.
 
 Every sample you list is used, even if the `.fam` file records parents for
@@ -177,7 +182,6 @@ rare or absent in the modern LD-estimation sample are exactly the case.
 | `--step` | 25 | unused (kept for CLI compatibility) — see note below |
 | `--r2` | 0.4 | r² threshold |
 | `--weighting` | `inverse` | how blocks contested between nominated samples are settled: `inverse` or `fair` (see [Choosing `--weighting`](#choosing---weighting)) |
-| `--autosomes-only` | off | restrict to autosomes before pruning |
 | `--make-bed` | off | also write the pruned PLINK fileset |
 | `--max-cleanup` | 10 | cap on cleanup passes |
 | `--keep-intermediates` | off | keep working files (the `.ld` can be ~0.5 GB) |
