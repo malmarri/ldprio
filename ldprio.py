@@ -90,7 +90,7 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 COMMON_PLINK_FLAGS = ["--allow-no-sex", "--allow-extra-chr"]
 POOL_WARN_FRACTION = 0.70
@@ -285,12 +285,32 @@ def compute_priority(plink, base, priority_keep_path, variants, work,
     return {snp: wt for snp, wt in zip(variants, weights) if wt > 0}
 
 
-def greedy_select(order, adj, priority, weighting):
+TRANSITIONS = ({"A", "G"}, {"C", "T"})
+
+
+def read_transversions(bim_path):
+    """IDs of biallelic A/C/G/T SNPs whose alleles are not a transition
+    (A<->G, C<->T) pair; indels and unknown alleles are never included."""
+    tv = set()
+    with open(bim_path) as fh:
+        for line in fh:
+            f = line.split()
+            if len(f) < 6:
+                continue
+            a, b = f[4].upper(), f[5].upper()
+            if (len(a) == len(b) == 1 and a != b and a in "ACGT" and b in "ACGT"
+                    and {a, b} not in TRANSITIONS):
+                tv.add(sys.intern(f[1]))
+    return tv
+
+
+def greedy_select(order, adj, priority, weighting, transversions=frozenset()):
     """Maximal independent set over the LD graph in `adj`: keep a SNP, block
     its LD neighbours. Priority-pool SNPs go first -- highest weight first
     ("inverse"), or by turns to the sample with the fewest SNPs kept so far
-    ("fair") -- then the rest in `order`'s order. Returns kept SNPs in
-    `order`'s order."""
+    ("fair") -- then the rest in `order`'s order. SNPs in `transversions`
+    win ties within the pool and go first among the rest. Returns kept SNPs
+    in `order`'s order."""
     blocked, kept_set = set(), set()
 
     def keep(snp):
@@ -304,8 +324,10 @@ def greedy_select(order, adj, priority, weighting):
             for i in priority.get(snp, ()):
                 queues[i].append(snp)
         for q in queues.values():
-            # popped from the end: most-shared first, then genomic order
-            q.sort(key=lambda snp: (len(priority[snp]), -index[snp]))
+            # popped from the end: most-shared first, then transversions,
+            # then genomic order
+            q.sort(key=lambda snp: (len(priority[snp]), snp in transversions,
+                                    -index[snp]))
         n_kept = defaultdict(int)
         turns = [(0, len(q), i) for i, q in queues.items()]
         heapq.heapify(turns)
@@ -326,19 +348,22 @@ def greedy_select(order, adj, priority, weighting):
             heapq.heappush(turns, (n_kept[i], size, i))
     else:
         pool = sorted((snp for snp in order if snp in priority),
-                      key=lambda snp: -priority[snp])
+                      key=lambda snp: (-priority[snp], snp not in transversions))
         for snp in pool:
             if snp not in blocked:
                 keep(snp)
 
-    for snp in order:
-        if snp not in priority and snp not in blocked:
+    rest = [snp for snp in order if snp not in priority]
+    if transversions:
+        rest.sort(key=lambda snp: snp not in transversions)
+    for snp in rest:
+        if snp not in blocked:
             keep(snp)
     return [s for s in order if s in kept_set]
 
 
 def r2_and_select(plink, base, snplist_path, ld_keep, window, r2,
-                   priority, weighting, work, tag):
+                   priority, weighting, transversions, work, tag):
     """One priority-aware LD-resolution pass: --r2 on the current surviving
     set, then greedy-select over whatever conflicts it finds. Returns
     (new_snplist_path, n_pairs_found, n_removed)."""
@@ -358,7 +383,7 @@ def r2_and_select(plink, base, snplist_path, ld_keep, window, r2,
     if n_pairs == 0:
         return snplist_path, 0, 0
 
-    kept = greedy_select(order, adj, priority, weighting)
+    kept = greedy_select(order, adj, priority, weighting, transversions)
     n_removed = len(order) - len(kept)
     out_path = w(f"{tag}.snplist")
     with open(out_path, "w") as fh:
@@ -397,6 +422,12 @@ def main():
                          "(best when coverage varies between them); 'fair' "
                          "evens out SNPs kept per sample (best when coverage "
                          "is similar). Default: inverse")
+    ap.add_argument("--prefer-transversions", action="store_true",
+                    help="among otherwise equal SNPs, keep transversions "
+                         "over transitions (C<->T, G<->A), which ancient-DNA "
+                         "damage can mimic. Changes which SNP is kept only "
+                         "where the choice barely matters for the priority "
+                         "samples")
     ap.add_argument("--make-bed", action="store_true",
                     help="also write the pruned PLINK fileset")
     ap.add_argument("--max-cleanup", type=int, default=10,
@@ -552,7 +583,10 @@ def prune(args, work):
 
     adj, n_pairs = read_ld_graph(w("ld.ld"))
 
-    kept = greedy_select(variants, adj, priority, args.weighting)
+    transversions = (read_transversions(base + ".bim")
+                     if args.prefer_transversions else frozenset())
+    kept = greedy_select(variants, adj, priority, args.weighting,
+                         transversions)
     current_snplist = w("greedy.snplist")
     with open(current_snplist, "w") as fh:
         fh.writelines(s + "\n" for s in kept)
@@ -573,7 +607,8 @@ def prune(args, work):
     for i in range(1, args.max_cleanup + 1):
         current_snplist, n_pairs_i, n_removed = r2_and_select(
             args.plink, base, current_snplist, ld_keep, args.window,
-            args.r2, priority, args.weighting, work, f"chk{i}")
+            args.r2, priority, args.weighting, transversions, work,
+            f"chk{i}")
         n_keep = sum(1 for _ in open(current_snplist))
         print(f"      cleanup pass {i}: {n_pairs_i:,} residual pairs, "
               f"removed {n_removed:,} -> {n_keep:,} SNPs", file=sys.stderr)
@@ -597,6 +632,10 @@ def prune(args, work):
           f"({'LD-independent, verified' if converged else 'NOT verified'}) | "
           f"priority retained {n_prio_final:,}/{len(priority):,} "
           f"({n_prio_final / len(priority):.1%})", file=sys.stderr)
+    if transversions:
+        n_tv = sum(1 for s in final if s in transversions)
+        print(f"      transversions: {n_tv:,}/{len(final):,} kept SNPs "
+              f"({n_tv / len(final):.1%})", file=sys.stderr)
     print(f"      wrote {args.out}.snplist", file=sys.stderr)
 
     if args.make_bed:

@@ -149,6 +149,27 @@ covering it. That let well-covered samples outvote sparse ones: with
 varying coverage the sparsest sample kept 0–3 SNPs at K ≥ 10, barely better
 than plain PLINK, so it is no longer offered.
 
+### Preferring transversions
+
+Ancient-DNA damage turns C into T (and G into A on the other strand), so
+transition calls (C↔T, G↔A) in ancient samples are less reliable than
+transversions. `--prefer-transversions` keeps a transversion over a
+transition whenever the two are otherwise equal: between SNPs with the same
+priority, and among SNPs no nominated sample covers. It never overrides the
+coverage weighting, so the priority samples keep essentially the same
+number of calls.
+
+On the benchmark panels (about one SNP in three a transversion), it raised
+the transversion share of the output from ~33% to 35–53%, with the priority
+samples' average retention unchanged (within 0.6 points). On decaying-LD
+panels the output can be up to ~5% smaller, since SNPs are no longer visited in
+strict genomic order.
+
+If you will remove transitions later anyway, filter the panel to
+transversions *before* running ldprio instead. In testing, that kept the
+priority samples just as many transversion calls and produced a panel with
+far more transversion SNPs than any preference setting could.
+
 ### What it does not do
 
 Finding the *maximum* independent set is NP-hard. This is a greedy
@@ -182,6 +203,7 @@ rare or absent in the modern LD-estimation sample are exactly the case.
 | `--step` | 25 | unused (kept for CLI compatibility) — see note below |
 | `--r2` | 0.4 | r² threshold |
 | `--weighting` | `inverse` | how blocks contested between nominated samples are settled: `inverse` or `fair` (see [Choosing `--weighting`](#choosing---weighting)) |
+| `--prefer-transversions` | off | among otherwise equal SNPs, keep transversions over transitions (see [Preferring transversions](#preferring-transversions)) |
 | `--make-bed` | off | also write the pruned PLINK fileset |
 | `--max-cleanup` | 10 | cap on cleanup passes |
 | `--keep-intermediates` | off | keep working files (the `.ld` can be ~0.5 GB) |
