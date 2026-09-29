@@ -81,20 +81,31 @@ Only autosomes (chromosomes 1-22) are pruned and written out.
 """
 
 import argparse
+import datetime
 import heapq
+import html
 import operator
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter, defaultdict
 
-__version__ = "1.4"
+__version__ = "1.5"
 
 COMMON_PLINK_FLAGS = ["--allow-no-sex", "--allow-extra-chr"]
 POOL_WARN_FRACTION = 0.70
 MIN_LD_SAMPLES = 30
+START = time.time()
+MESSAGES = []
+
+
+def emit(text):
+    """Print a warning/note to stderr and keep it for the HTML report."""
+    print(text, file=sys.stderr)
+    MESSAGES.append(" ".join(text.split()))
 
 
 def run(cmd, label):
@@ -224,6 +235,211 @@ def read_ld_graph(ld_path):
     return adj, n_pairs
 
 
+def read_priority_bed(prefix, n_variants):
+    """Sample IDs and the packed genotype bytes of a SNP-major .bed subset:
+    (iids, n_samples, bytes_per_snp, data)."""
+    with open(prefix + ".fam") as fh:
+        iids = [ln.split()[1] for ln in fh if ln.strip()]
+    n = len(iids)
+    rec = (n + 3) // 4
+    with open(prefix + ".bed", "rb") as fh:
+        raw = fh.read()
+    if raw[:3] != b"\x6c\x1b\x01":
+        sys.exit(f"ERROR: {prefix}.bed is not a SNP-major PLINK 1 .bed")
+    data = raw[3:]
+    if len(data) != rec * n_variants:
+        sys.exit(f"ERROR: {prefix}.bed has {len(data)} genotype bytes, "
+                 f"expected {rec * n_variants}")
+    return iids, n, rec, data
+
+
+def _slots(n, p, b):
+    """Samples with a call in byte b of a SNP record's byte p. The .bed packs
+    4 samples per byte, 2 bits each, low bits first; 0b01 = missing; padding
+    slots past the last sample are excluded."""
+    return [j for j in range(4) if 4 * p + j < n and (b >> (2 * j)) & 3 != 1]
+
+
+def per_sample_calls(n, rec, data, idx=None):
+    """Called SNPs per sample, over every SNP or only the SNP records `idx`."""
+    counts = [0] * n
+    for p in range(rec):
+        col = data[p::rec]
+        for b, c in Counter(col if idx is None else (col[k] for k in idx)).items():
+            for j in _slots(n, p, b):
+                counts[4 * p + j] += c
+    return counts
+
+
+REPORT_CSS = """
+:root{--bg:#fff;--card:#f6f8fa;--text:#1f2328;--muted:#59636e;--line:#d1d9e0;
+--track:#e6eaee;--accent:#0969da;--good:#1a7f37;--bad:#cf222e;--warn:#9a6700}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0d1117;
+--card:#151b23;--text:#e6edf3;--muted:#9198a1;--line:#3d444d;--track:#262c36;
+--accent:#4493f8;--good:#3fb950;--bad:#f85149;--warn:#d29922}}
+:root[data-theme="dark"]{--bg:#0d1117;--card:#151b23;--text:#e6edf3;--muted:#9198a1;
+--line:#3d444d;--track:#262c36;--accent:#4493f8;--good:#3fb950;--bad:#f85149;--warn:#d29922}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+main{max-width:920px;margin:0 auto;padding:28px 16px 48px}
+h1{font-size:24px;margin:0 0 4px}
+h2{font-size:17px;margin:34px 0 4px}
+.sub,.hint{color:var(--muted);font-size:13px;margin:0 0 12px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:18px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.tile .k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.tile .v{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
+.tile .s{color:var(--muted);font-size:13px}
+.good{color:var(--good)}.bad{color:var(--bad)}
+.row{display:grid;grid-template-columns:minmax(80px,150px) 1fr minmax(120px,auto);
+gap:10px;align-items:center;padding:3px 0}
+.row.wide{grid-template-columns:minmax(120px,250px) 1fr minmax(70px,auto)}
+.lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.track{height:14px;background:var(--track);border-radius:7px;overflow:hidden}
+.fill{height:100%;background:var(--accent);border-radius:7px;min-width:2px}
+.fill.zero{min-width:0}
+.num{font-size:13px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.hist{display:flex;gap:6px;align-items:flex-end;height:170px;margin:12px 0 4px}
+.bin{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%}
+.hb{width:100%;background:var(--accent);border-radius:4px 4px 0 0;min-height:2px}
+.hn{font-size:12px;color:var(--muted);margin-bottom:2px;font-variant-numeric:tabular-nums}
+.hl{font-size:11px;color:var(--muted);margin-top:4px}
+table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:500}td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 18px;margin:8px 0;font-size:14px}
+dt{color:var(--muted)}dd{margin:0;word-break:break-word}
+code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+ul{padding-left:20px;margin:8px 0}li{margin:5px 0;font-size:14px}
+li.w{color:var(--warn)}
+footer{color:var(--muted);font-size:12px;margin-top:40px}
+"""
+
+
+def write_report(path, r):
+    """Write a self-contained HTML report (no scripts, no external files)."""
+    esc = html.escape
+    n = lambda x: f"{x:,}"
+    pct = lambda a, b: f"{100 * a / b:.1f}%" if b else "n/a"
+
+    samples = sorted(r["samples"], key=lambda t: (t[1], t[0]))
+    usable = [t for t in samples if t[1] > 0]
+    mean_share = (sum(k / a for _, a, k in usable) / len(usable)) if usable else 0
+    ok = r["converged"]
+
+    def tile(k, v, sub, cls=""):
+        return (f'<div class="tile"><div class="k">{k}</div>'
+                f'<div class="v {cls}">{v}</div><div class="s">{sub}</div></div>')
+
+    tiles = "".join([
+        tile("Final panel", n(r["final"]),
+             f'of {n(r["n_snps"])} autosomal SNPs'),
+        tile("Priority samples", n(len(samples)), f'{esc(r["weighting"])} weighting'),
+        tile("Average share kept", f"{100 * mean_share:.0f}%",
+             "of each priority sample's own SNPs"),
+        tile("LD check", "Passed" if ok else "Not verified",
+             f'no pair above r&sup2; {r["r2"]} within {r["window"]} variants'
+             if ok else "raise --max-cleanup", "good" if ok else "bad"),
+    ])
+
+    if len(samples) <= 40:
+        rows = []
+        for iid, avail, kept in samples:
+            share = kept / avail if avail else 0
+            cls = "fill zero" if kept == 0 else "fill"
+            rows.append(
+                f'<div class="row"><div class="lab" title="{esc(iid)}">{esc(iid)}</div>'
+                f'<div class="track"><div class="{cls}" style="width:{100 * share:.1f}%"></div></div>'
+                f'<div class="num">{n(kept)} of {n(avail)} ({pct(kept, avail)})</div></div>')
+        per_sample = "".join(rows)
+        per_sample_hint = ('<p class="hint">Bar = share of the sample\'s own SNPs '
+                           '(those it has calls at in the input panel) that '
+                           'survived pruning.</p>')
+    else:
+        bins = [0] * 10
+        for _, a, k in usable:
+            bins[min(int(10 * k / a), 9)] += 1
+        top = max(bins) or 1
+        hist = "".join(
+            f'<div class="bin"><div class="hn">{c}</div>'
+            f'<div class="hb" style="height:{100 * c / top * 0.78:.1f}%"></div>'
+            f'<div class="hl">{10 * i}&ndash;{10 * i + 10}%</div></div>'
+            for i, c in enumerate(bins))
+        worst = sorted(samples, key=lambda t: (t[2], t[0]))[:15]
+        trs = "".join(
+            f'<tr><td>{esc(i)}</td><td class="r">{n(a)}</td><td class="r">{n(k)}</td>'
+            f'<td class="r">{pct(k, a)}</td></tr>' for i, a, k in worst)
+        per_sample_hint = ('<p class="hint">Number of priority samples by share '
+                           'of their own SNPs (those they have calls at in the '
+                           'input panel) that survived pruning.</p>')
+        per_sample = (
+            f'<div class="hist">{hist}</div>'
+            '<h3 style="font-size:14px;margin:22px 0 0">15 samples with the fewest SNPs kept</h3>'
+            '<table><tr><th>Sample</th><th class="r">SNPs with calls</th>'
+            f'<th class="r">SNPs kept</th><th class="r">Share kept</th></tr>{trs}</table>')
+
+    steps = [("Autosomal SNPs in input", r["n_snps"], "")]
+    steps.append(("After first LD pass", r["greedy"], ""))
+    for i, pairs, removed, keep in r["passes"]:
+        steps.append((f"Cleanup pass {i}", keep,
+                      f'{n(pairs)} residual pairs, removed {n(removed)}'))
+    steps.append(("Final panel", r["final"], ""))
+    funnel = "".join(
+        f'<div class="row wide"><div class="lab">{esc(lab)}</div>'
+        f'<div class="track"><div class="fill" style="width:{100 * v / r["n_snps"]:.1f}%"></div></div>'
+        f'<div class="num">{n(v)}</div></div>'
+        + (f'<div class="hint" style="margin:-2px 0 6px 0">{extra}</div>' if extra else "")
+        for lab, v, extra in steps)
+
+    settings = [
+        ("Weighting", r["weighting"]),
+        ("LD samples", n(r["n_ld"])),
+        ("r&sup2; threshold / window", f'{r["r2"]} / {r["window"]} variants'),
+        ("Priority pool", f'{n(r["pool"])} SNPs ({pct(r["pool"], r["n_snps"])} of panel)'),
+        ("Pool SNPs retained", f'{n(r["prio_final"])} ({pct(r["prio_final"], r["pool"])})'),
+        ("Non-autosomal SNPs dropped", n(r["n_input"] - r["n_snps"])),
+        ("Samples in input", n(r["n_fam"])),
+    ]
+    if r["tv_share"] is not None:
+        settings.append(("Transversions in output", pct(*r["tv_share"])))
+    settings.append(("Run time", f'{r["runtime"]:.1f} s' if r["runtime"] < 10
+                     else f'{r["runtime"]:.0f} s'))
+    dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in settings)
+
+    def msg(m):
+        if m.startswith("WARNING:"):
+            return f'<li class="w">{esc(m[8:].strip())}</li>'
+        return f'<li>{esc(m[5:].strip() if m.startswith("note:") else m)}</li>'
+
+    msgs = "".join(msg(m) for m in r["messages"]) \
+        or '<li class="good">No warnings.</li>'
+
+    doc = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ldprio report</title><style>{REPORT_CSS}</style></head><body><main>
+<h1>ldprio report</h1>
+<p class="sub">v{esc(r["version"])} &middot; {esc(r["when"])} &middot; <code>{esc(r["out"])}</code></p>
+<div class="tiles">{tiles}</div>
+<h2>What each priority sample kept</h2>
+{per_sample_hint}{per_sample}
+<h2>Panel size through the run</h2>
+<p class="hint">Bars are relative to the autosomal SNPs in the input.</p>
+{funnel}
+<h2>Run details</h2>
+<dl>{dl}</dl>
+<h2>Warnings and notes</h2>
+<ul>{msgs}</ul>
+<h2>Command</h2>
+<p><code>{esc(r["command"])}</code></p>
+<footer>Generated by ldprio {esc(r["version"])}. Self-contained file: no scripts or external resources.</footer>
+</main></body></html>
+"""
+    with open(path, "w") as fh:
+        fh.write(doc)
+
+
 def compute_priority(plink, base, priority_keep_path, variants, work,
                      weighting):
     """Priority pool from the --priority-samples' calls, keyed by SNP and
@@ -234,24 +450,10 @@ def compute_priority(plink, base, priority_keep_path, variants, work,
     run([plink, "--bfile", base, "--keep", priority_keep_path, "--make-bed",
          *COMMON_PLINK_FLAGS, "--out", prefix], "priority subset")
 
-    with open(prefix + ".fam") as fh:
-        iids = [ln.split()[1] for ln in fh if ln.strip()]
-    n = len(iids)
-    rec = (n + 3) // 4
-    with open(prefix + ".bed", "rb") as fh:
-        raw = fh.read()
-    if raw[:3] != b"\x6c\x1b\x01":
-        sys.exit(f"ERROR: {prefix}.bed is not a SNP-major PLINK 1 .bed")
-    data = raw[3:]
-    if len(data) != rec * len(variants):
-        sys.exit(f"ERROR: {prefix}.bed has {len(data)} genotype bytes, "
-                 f"expected {rec * len(variants)}")
+    iids, n, rec, data = read_priority_bed(prefix, len(variants))
 
-    # .bed packs 4 samples per byte, 2 bits each, low bits first; 0b01 = missing.
-    # Padding slots past the last sample are excluded.
     def called_slots(p, b):
-        return [j for j in range(4)
-                if 4 * p + j < n and (b >> (2 * j)) & 3 != 1]
+        return _slots(n, p, b)
 
     coverage = [0] * n
     for p in range(rec):
@@ -262,8 +464,8 @@ def compute_priority(plink, base, priority_keep_path, variants, work,
     empty = [iids[i] for i in range(n) if coverage[i] == 0]
     if empty:
         preview = ", ".join(empty[:5]) + ("..." if len(empty) > 5 else "")
-        print(f"      WARNING: {len(empty)} priority sample(s) have no calls "
-              f"in this panel: {preview}", file=sys.stderr)
+        emit(f"      WARNING: {len(empty)} priority sample(s) have no calls "
+              f"in this panel: {preview}")
 
     if weighting == "fair":
         slots = [[[4 * p + j for j in called_slots(p, b)] for b in range(256)]
@@ -431,6 +633,9 @@ def main():
                          "damage can mimic. Changes which SNP is kept only "
                          "where the choice barely matters for the priority "
                          "samples")
+    ap.add_argument("--report", action="store_true",
+                    help="also write an HTML report of the results "
+                         "(<out>.report.html)")
     ap.add_argument("--make-bed", action="store_true",
                     help="also write the pruned PLINK fileset")
     ap.add_argument("--max-cleanup", type=int, default=10,
@@ -524,11 +729,10 @@ def prune(args, work):
           f"{len(priority_samples)} sample(s), {args.weighting} "
           f"weighting)", file=sys.stderr)
     if pool_frac > POOL_WARN_FRACTION:
-        print(f"      WARNING: priority pool is {pool_frac:.0%} of the panel. "
+        emit(f"      WARNING: priority pool is {pool_frac:.0%} of the panel. "
               f"Most blocks are now contested between nominated samples, so "
               f"each keeps a smaller share of its sites -- consider "
-              f"nominating only the samples that actually need it.",
-              file=sys.stderr)
+              f"nominating only the samples that actually need it.")
 
     # ---- LD samples ------------------------------------------------------------
     ld_samples = resolve_samples(args.ld_samples, fam_by_iid, fam_pairs,
@@ -541,18 +745,18 @@ def prune(args, work):
     if overlap:
         preview = ", ".join(f"{fid}/{iid}" for fid, iid in sorted(overlap)[:5]) + \
                   ("..." if len(overlap) > 5 else "")
-        print(f"      WARNING: {len(overlap)} sample(s) appear in both "
+        emit(f"      WARNING: {len(overlap)} sample(s) appear in both "
               f"--priority-samples and --ld-samples: {preview}\n"
               f"      If these are pseudo-haploid ancient samples this is "
               f"exactly the LD-distortion case --ld-samples exists to "
-              f"avoid (see LD SOURCE in --help).", file=sys.stderr)
+              f"avoid (see LD SOURCE in --help).")
     if len(ld_samples) < MIN_LD_SAMPLES:
-        print(f"      WARNING: LD is estimated from only {len(ld_samples)} "
+        emit(f"      WARNING: LD is estimated from only {len(ld_samples)} "
               f"sample(s). With fewer than {MIN_LD_SAMPLES}, r2 estimates are "
               f"noisy: unrelated SNPs can pass the threshold by chance and "
               f"linked SNPs can be missed, so the pruned panel may be smaller "
               f"or less independent than intended. Continuing anyway; "
-              f"consider a larger --ld-samples set.", file=sys.stderr)
+              f"consider a larger --ld-samples set.")
 
     # SNPs monomorphic in --ld-samples have undefined r2 and plink's --r2
     # simply omits them from its output -- they never enter the LD graph and
@@ -575,12 +779,11 @@ def prune(args, work):
     unevaluated_priority = [s for s in priority if s in monomorphic]
     if unevaluated_priority:
         frac = len(unevaluated_priority) / len(priority)
-        print(f"      note: {len(unevaluated_priority):,}/{len(priority):,} "
+        emit(f"      note: {len(unevaluated_priority):,}/{len(priority):,} "
               f"({frac:.1%}) priority-pool SNPs are monomorphic in --ld-samples "
               f"and were never evaluated for LD (always kept; may still be "
               f"correlated with each other among the samples that matter for "
-              f"them, just invisible to the moderns-only estimate)",
-              file=sys.stderr)
+              f"them, just invisible to the moderns-only estimate)")
 
     # ---- initial LD graph + greedy prioritised selection --------------------
     if n_snps >= 2:
@@ -596,9 +799,9 @@ def prune(args, work):
     transversions = (read_transversions(base + ".bim")
                      if args.prefer_transversions else frozenset())
     if args.prefer_transversions and not transversions:
-        print("      WARNING: --prefer-transversions found no A/C/G/T "
+        emit("      WARNING: --prefer-transversions found no A/C/G/T "
               "transversion SNPs in the .bim (alleles missing or coded 0?); "
-              "the option has no effect.", file=sys.stderr)
+              "the option has no effect.")
     kept = greedy_select(variants, adj, priority, args.weighting,
                          transversions)
     current_snplist = w("greedy.snplist")
@@ -618,12 +821,14 @@ def prune(args, work):
     # --indep-pairwise heuristic, which has no notion of priority and could
     # drop a priority SNP in favour of a non-priority one.
     converged = False
+    passes = []
     for i in range(1, args.max_cleanup + 1):
         current_snplist, n_pairs_i, n_removed = r2_and_select(
             args.plink, base, current_snplist, ld_keep, args.window,
             args.r2, priority, args.weighting, transversions, work,
             f"chk{i}")
         n_keep = sum(1 for _ in open(current_snplist))
+        passes.append((i, n_pairs_i, n_removed, n_keep))
         print(f"      cleanup pass {i}: {n_pairs_i:,} residual pairs, "
               f"removed {n_removed:,} -> {n_keep:,} SNPs", file=sys.stderr)
         if n_pairs_i == 0:
@@ -631,9 +836,8 @@ def prune(args, work):
             break
 
     if not converged:
-        print(f"WARNING: not converged after {args.max_cleanup} cleanup "
-              f"passes; residual LD may remain. Raise --max-cleanup.",
-              file=sys.stderr)
+        emit(f"WARNING: not converged after {args.max_cleanup} cleanup "
+              f"passes; residual LD may remain. Raise --max-cleanup.")
 
     # ---- outputs -----------------------------------------------------------
     final = [ln.strip() for ln in open(current_snplist) if ln.strip()]
@@ -657,6 +861,25 @@ def prune(args, work):
              "--make-bed", *COMMON_PLINK_FLAGS, "--out", args.out],
             "final --make-bed")
         print(f"      wrote {args.out}.{{bed,bim,fam}}", file=sys.stderr)
+
+    if args.report:
+        iids, n_prio, rec, data = read_priority_bed(w("priority"), n_snps)
+        avail = per_sample_calls(n_prio, rec, data)
+        kept_idx = [k for k, snp in enumerate(variants) if snp in final_set]
+        kept_calls = per_sample_calls(n_prio, rec, data, kept_idx)
+        n_tv = sum(1 for s in final if s in transversions)
+        write_report(args.out + ".report.html", dict(
+            version=__version__, out=args.out, command=" ".join(sys.argv),
+            when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            runtime=time.time() - START, weighting=args.weighting,
+            r2=args.r2, window=args.window, n_input=n_input, n_snps=n_snps,
+            n_fam=n_fam, n_ld=len(ld_samples), pool=len(priority),
+            prio_final=n_prio_final, greedy=len(kept), passes=passes,
+            final=len(final), converged=converged,
+            samples=list(zip(iids, avail, kept_calls)),
+            tv_share=(n_tv, len(final)) if transversions else None,
+            messages=list(MESSAGES)))
+        print(f"      wrote {args.out}.report.html", file=sys.stderr)
 
     return converged
 

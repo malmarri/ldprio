@@ -38,6 +38,8 @@ python3 ldprio.py \
 
 Writes `panel_pruned.snplist` (and `.bed/.bim/.fam` with `--make-bed`).
 
+Add `--report` to also write `panel_pruned.report.html`, a self-contained page that shows, for each priority sample, how many of its SNPs were kept, along with the panel size through the run and any warnings.
+
 Sample list files are one sample per line, either `IID` or `FID<TAB>IID`.
 
 Only autosomes (chromosomes 1–22) are pruned and written out; X, Y,
@@ -210,6 +212,7 @@ rare or absent in the modern LD-estimation sample are exactly the case.
 | `--r2` | 0.4 | r² threshold |
 | `--weighting` | `inverse` | how blocks contested between nominated samples are settled: `inverse` or `fair` (see [Choosing `--weighting`](#choosing---weighting)) |
 | `--prefer-transversions` | off | among otherwise equal SNPs, keep transversions over transitions (see [Preferring transversions](#preferring-transversions)) |
+| `--report` | off | also write an HTML report of the results (`<out>.report.html`) |
 | `--make-bed` | off | also write the pruned PLINK fileset |
 | `--max-cleanup` | 10 | cap on cleanup passes |
 | `--keep-intermediates` | off | keep working files (the `.ld` can be ~0.5 GB) |
