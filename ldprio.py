@@ -90,7 +90,7 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 
-__version__ = "1.3"
+__version__ = "1.3.1"
 
 COMMON_PLINK_FLAGS = ["--allow-no-sex", "--allow-extra-chr"]
 POOL_WARN_FRACTION = 0.70
@@ -368,6 +368,9 @@ def r2_and_select(plink, base, snplist_path, ld_keep, window, r2,
     set, then greedy-select over whatever conflicts it finds. Returns
     (new_snplist_path, n_pairs_found, n_removed)."""
     w = lambda name: os.path.join(work, name)
+    with open(snplist_path) as fh:
+        if sum(1 for ln in fh if ln.strip()) < 2:
+            return snplist_path, 0, 0
     ld_path = w(f"{tag}.ld")
     if os.path.exists(ld_path):
         os.remove(ld_path)  # never let a stale .ld from an earlier pass/run survive a failed write
@@ -449,6 +452,11 @@ def main():
 
     if shutil.which(args.plink) is None:
         sys.exit(f"ERROR: '{args.plink}' not found on PATH")
+    ver = subprocess.run([args.plink, "--version"], capture_output=True,
+                         text=True).stdout
+    if not ver.startswith("PLINK v1."):
+        sys.exit(f"ERROR: ldprio needs PLINK 1.9, but '{args.plink}' reports "
+                 f"'{ver.strip()[:60]}'. PLINK 2 is not supported.")
     for ext in (".bed", ".bim", ".fam"):
         if not os.path.exists(args.bfile + ext):
             sys.exit(f"ERROR: {args.bfile}{ext} not found")
@@ -562,7 +570,7 @@ def prune(args, work):
         fh.readline()
         for line in fh:
             f = line.split()
-            if len(f) >= 5 and f[4] == "0":
+            if len(f) >= 5 and f[4] in ("0", "NA"):
                 monomorphic.add(f[1])
     unevaluated_priority = [s for s in priority if s in monomorphic]
     if unevaluated_priority:
@@ -575,16 +583,22 @@ def prune(args, work):
               file=sys.stderr)
 
     # ---- initial LD graph + greedy prioritised selection --------------------
-    run([args.plink, "--bfile", base, *ld_keep, "--make-founders", "--r2",
-         "--ld-window", str(args.window),
-         "--ld-window-kb", "999999",
-         "--ld-window-r2", str(args.r2),
-         *COMMON_PLINK_FLAGS, "--out", w("ld")], "plink --r2")
-
-    adj, n_pairs = read_ld_graph(w("ld.ld"))
+    if n_snps >= 2:
+        run([args.plink, "--bfile", base, *ld_keep, "--make-founders", "--r2",
+             "--ld-window", str(args.window),
+             "--ld-window-kb", "999999",
+             "--ld-window-r2", str(args.r2),
+             *COMMON_PLINK_FLAGS, "--out", w("ld")], "plink --r2")
+        adj, n_pairs = read_ld_graph(w("ld.ld"))
+    else:
+        adj, n_pairs = defaultdict(list), 0
 
     transversions = (read_transversions(base + ".bim")
                      if args.prefer_transversions else frozenset())
+    if args.prefer_transversions and not transversions:
+        print("      WARNING: --prefer-transversions found no A/C/G/T "
+              "transversion SNPs in the .bim (alleles missing or coded 0?); "
+              "the option has no effect.", file=sys.stderr)
     kept = greedy_select(variants, adj, priority, args.weighting,
                          transversions)
     current_snplist = w("greedy.snplist")

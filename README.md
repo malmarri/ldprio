@@ -28,7 +28,7 @@ way. Sparse samples keep substantially more of their real data.
 ## Quick start
 
 ```bash
-ldprio.py \
+python3 ldprio.py \
     --bfile panel_qc \
     --priority-samples priority_samples.txt \
     --ld-samples calculate_ld_samples.txt \
