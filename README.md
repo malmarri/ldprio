@@ -45,9 +45,9 @@ mitochondrial and unplaced contigs are dropped.
 
 ## Choosing the LD samples
 
-Use `--ld-samples` to restrict r² estimation to high-quality samples with
-reliable diploid calls: modern samples, or high-coverage ancient ones. Leave
-out pseudo-haploid samples, whose calls make LD look weaker than it is.
+`--ld-samples` is required. It restricts r² estimation to high-quality samples
+with reliable diploid calls: modern samples, or high-coverage ancient ones.
+Leave out pseudo-haploid samples, whose calls make LD look weaker than it is.
 
 Use at least 30 samples. With few samples the r² estimates are noisy:
 unrelated SNPs pass the threshold by chance (at the default 0.4, about 4% of
@@ -55,7 +55,6 @@ unlinked SNP pairs with 10 samples, 0.3% with 20 and almost none with 30 or
 more), and truly linked SNPs can be missed, so the pruned panel may be
 smaller or less independent than intended. ldprio prints a warning below 30
 and carries on.
-If you omit `--ld-samples` the whole cohort is used and a warning is printed.
 
 Every sample you list is used, even if the `.fam` file records parents for
 it (columns 3–4). By default PLINK quietly leaves such samples out of LD
@@ -205,7 +204,7 @@ rare or absent in the modern LD-estimation sample are exactly the case.
 | `--bfile` | required | input PLINK prefix |
 | `--out` | required | output prefix |
 | `--priority-samples` | required | samples whose covered SNPs to favour |
-| `--ld-samples` | whole cohort | samples LD is estimated from |
+| `--ld-samples` | required | samples LD is estimated from (at least 30 recommended) |
 | `--window` | 200 | window, in variants |
 | `--step` | 25 | unused (kept for CLI compatibility) — see note below |
 | `--r2` | 0.4 | r² threshold |

@@ -36,10 +36,10 @@ LD is estimated only from the samples given by --ld-samples, which should be
 high-quality samples with reliable diploid calls -- modern, or high-coverage
 ancient. Pseudo-haploid ancient calls (a single random
 read reported as a homozygote) systematically distort r2 downward, so
-including them hides real LD and leaves the panel under-pruned. If you omit
---ld-samples the whole cohort is used and a warning is printed. If a
-priority sample also appears in --ld-samples, a warning is printed -- that's
-the exact mistake the above guards against.
+including them hides real LD and leaves the panel under-pruned. --ld-samples
+is required, so the cohort's pseudo-haploid samples are never used by
+default. If a priority sample also appears in --ld-samples, a warning is
+printed -- that's the exact mistake the above guards against.
 
 METHOD
 ------
@@ -90,7 +90,7 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 
-__version__ = "1.3.2"
+__version__ = "1.4"
 
 COMMON_PLINK_FLAGS = ["--allow-no-sex", "--allow-extra-chr"]
 POOL_WARN_FRACTION = 0.70
@@ -405,11 +405,10 @@ def main():
     ap.add_argument("--out", required=True, help="output prefix")
     ap.add_argument("--priority-samples", required=True,
                     help="samples whose covered SNPs should be favoured")
-    ap.add_argument("--ld-samples",
+    ap.add_argument("--ld-samples", required=True,
                     help="samples LD is estimated from (use high-quality "
                          "samples with reliable diploid calls, modern or "
-                         "high-coverage ancient; default: whole cohort, "
-                         "with a warning)")
+                         "high-coverage ancient; at least 30)")
     ap.add_argument("--window", type=int, default=200,
                     help="window in variants (default: 200)")
     ap.add_argument("--step", type=int, default=25,
@@ -532,37 +531,28 @@ def prune(args, work):
               file=sys.stderr)
 
     # ---- LD samples ------------------------------------------------------------
-    ld_keep = []
-    if args.ld_samples:
-        ld_samples = resolve_samples(args.ld_samples, fam_by_iid, fam_pairs,
-                                     "--ld-samples")
-        write_keep(ld_samples, w("ld.keep"))
-        ld_keep = ["--keep", w("ld.keep")]
-        print(f"[3/5] estimating LD from {len(ld_samples):,} samples",
-              file=sys.stderr)
-        overlap = set(priority_samples) & set(ld_samples)
-        if overlap:
-            preview = ", ".join(f"{fid}/{iid}" for fid, iid in sorted(overlap)[:5]) + \
-                      ("..." if len(overlap) > 5 else "")
-            print(f"      WARNING: {len(overlap)} sample(s) appear in both "
-                  f"--priority-samples and --ld-samples: {preview}\n"
-                  f"      If these are pseudo-haploid ancient samples this is "
-                  f"exactly the LD-distortion case --ld-samples exists to "
-                  f"avoid (see LD SOURCE in --help).", file=sys.stderr)
-    else:
-        print("[3/5] WARNING: --ld-samples not given, estimating LD from the "
-              "whole cohort. If it contains pseudo-haploid ancient samples "
-              "their calls will deflate r2 and leave the panel under-pruned.",
-              file=sys.stderr)
-
-    n_ld = len(ld_samples) if args.ld_samples else n_fam
-    if n_ld < MIN_LD_SAMPLES:
-        print(f"      WARNING: LD is estimated from only {n_ld} sample(s). "
-              f"With fewer than {MIN_LD_SAMPLES}, r2 estimates are noisy: "
-              f"unrelated SNPs can pass the threshold by chance and linked "
-              f"SNPs can be missed, so the pruned panel may be smaller or "
-              f"less independent than intended. Continuing anyway; consider "
-              f"a larger --ld-samples set.", file=sys.stderr)
+    ld_samples = resolve_samples(args.ld_samples, fam_by_iid, fam_pairs,
+                                 "--ld-samples")
+    write_keep(ld_samples, w("ld.keep"))
+    ld_keep = ["--keep", w("ld.keep")]
+    print(f"[3/5] estimating LD from {len(ld_samples):,} samples",
+          file=sys.stderr)
+    overlap = set(priority_samples) & set(ld_samples)
+    if overlap:
+        preview = ", ".join(f"{fid}/{iid}" for fid, iid in sorted(overlap)[:5]) + \
+                  ("..." if len(overlap) > 5 else "")
+        print(f"      WARNING: {len(overlap)} sample(s) appear in both "
+              f"--priority-samples and --ld-samples: {preview}\n"
+              f"      If these are pseudo-haploid ancient samples this is "
+              f"exactly the LD-distortion case --ld-samples exists to "
+              f"avoid (see LD SOURCE in --help).", file=sys.stderr)
+    if len(ld_samples) < MIN_LD_SAMPLES:
+        print(f"      WARNING: LD is estimated from only {len(ld_samples)} "
+              f"sample(s). With fewer than {MIN_LD_SAMPLES}, r2 estimates are "
+              f"noisy: unrelated SNPs can pass the threshold by chance and "
+              f"linked SNPs can be missed, so the pruned panel may be smaller "
+              f"or less independent than intended. Continuing anyway; "
+              f"consider a larger --ld-samples set.", file=sys.stderr)
 
     # SNPs monomorphic in --ld-samples have undefined r2 and plink's --r2
     # simply omits them from its output -- they never enter the LD graph and
