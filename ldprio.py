@@ -90,10 +90,11 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 COMMON_PLINK_FLAGS = ["--allow-no-sex", "--allow-extra-chr"]
 POOL_WARN_FRACTION = 0.70
+MIN_LD_SAMPLES = 30
 
 
 def run(cmd, label):
@@ -553,6 +554,15 @@ def prune(args, work):
               "whole cohort. If it contains pseudo-haploid ancient samples "
               "their calls will deflate r2 and leave the panel under-pruned.",
               file=sys.stderr)
+
+    n_ld = len(ld_samples) if args.ld_samples else n_fam
+    if n_ld < MIN_LD_SAMPLES:
+        print(f"      WARNING: LD is estimated from only {n_ld} sample(s). "
+              f"With fewer than {MIN_LD_SAMPLES}, r2 estimates are noisy: "
+              f"unrelated SNPs can pass the threshold by chance and linked "
+              f"SNPs can be missed, so the pruned panel may be smaller or "
+              f"less independent than intended. Continuing anyway; consider "
+              f"a larger --ld-samples set.", file=sys.stderr)
 
     # SNPs monomorphic in --ld-samples have undefined r2 and plink's --r2
     # simply omits them from its output -- they never enter the LD graph and
