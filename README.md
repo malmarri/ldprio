@@ -49,20 +49,15 @@ mitochondrial and unplaced contigs are dropped.
 
 `--ld-samples` is required. It restricts r² estimation to high-quality samples
 with reliable diploid calls: modern samples, or high-coverage ancient ones.
-Leave out pseudo-haploid samples, whose calls make LD look weaker than it is.
 
-Use at least 30 samples. With few samples the r² estimates are noisy:
-unrelated SNPs pass the threshold by chance (at the default 0.4, about 4% of
-unlinked SNP pairs with 10 samples, 0.3% with 20 and almost none with 30 or
-more), and truly linked SNPs can be missed, so the pruned panel may be
-smaller or less independent than intended. ldprio prints a warning below 30
+Suggested to use at least 30 samples. With few samples the r² estimates are noisy:
+unrelated SNPs pass the threshold by chance. ldprio prints a warning below 30
 and carries on.
 
 Every sample you list is used, even if the `.fam` file records parents for
 it (columns 3–4). By default PLINK quietly leaves such samples out of LD
 estimates; ldprio turns that off so none of your LD samples are dropped.
-Most aDNA and reference panels record no parents (`0 0`), in which case
-this changes nothing.
+
 
 ## How it works
 
@@ -86,9 +81,7 @@ The output is verified LD-independent *within the `--window` variant-count
 window used throughout* (the same scope PLINK's own `--indep-pairwise`/`--r2`
 guarantee, not a literal unbounded genome-wide claim): the final cleanup
 pass finds zero residual pairs within that window. If it does not converge
-within `--max-cleanup` passes, `ldprio` exits non-zero rather than silently
-handing back a dirty panel — it still writes the (unconverged) output, so
-you can inspect it, but a calling pipeline under `set -e` will stop.
+within `--max-cleanup` passes, `ldprio` exits non-zero error.
 
 ### Scaling to more priority samples
 
@@ -98,7 +91,7 @@ nominated samples and each one keeps a smaller share of its sites. The
 `[2/5] priority pool: X%` line reports where you are; above ~70% you'll see
 a warning. Nominate only the samples that actually need the help.
 
-Measured by sweeping K (number of nominated low-coverage samples) on a
+Measured by number of nominated low-coverage samples (K) on a
 2,000-SNP / 200-block synthetic panel with 200 modern + 100 low-coverage
 samples. "Mean" is the average share of each nominated sample's own calls
 that survive pruning; "fewest" is the fewest SNPs any one nominated sample
@@ -148,14 +141,9 @@ only one SNP survives, so someone loses. `--weighting` decides who:
   shared with more nominated samples. This evens out the absolute number of
   SNPs kept per sample, at a small cost in average retention.
 
-Use `inverse` when coverage varies a lot between the samples you nominate
+Use `inverse` when coverage varies between the samples you nominate
 (the usual ancient-DNA case) and `fair` when they have similar coverage.
 With one nominated sample the two are identical.
-
-An earlier version weighted each SNP by the *number* of nominated samples
-covering it. That let well-covered samples outvote sparse ones: with
-varying coverage the sparsest sample kept 0–3 SNPs at K ≥ 10, barely better
-than plain PLINK, so it is no longer offered.
 
 ### Preferring transversions
 
@@ -167,37 +155,21 @@ priority, and among SNPs no nominated sample covers. It never overrides the
 coverage weighting, so the priority samples keep essentially the same
 number of calls.
 
-On the benchmark panels (about one SNP in three a transversion), it raised
-the transversion share of the output from ~33% to 35–53%, with the priority
-samples' average retention unchanged (within 0.6 points). On decaying-LD
-panels the output can be up to ~5% smaller, since SNPs are no longer visited in
-strict genomic order.
-
 If you will remove transitions later anyway, filter the panel to
 transversions *before* running ldprio instead. In testing, that kept the
 priority samples just as many transversion calls and produced a panel with
 far more transversion SNPs than any preference setting could.
 
-### What it does not do
+### Notes
 
-Finding the *maximum* independent set is NP-hard. This is a greedy
-heuristic, as is PLINK's own, so the two land on different valid solutions
-that can differ noticeably in size. On clean, disjoint LD blocks both keep
-one SNP per block. Where LD decays gradually along the chromosome, as in
-real data, `ldprio` kept ~29% more SNPs than `plink --indep-pairwise` on the
-test panel below, and PLINK's own check still found no residual LD in
-either. So the output is as LD-independent as PLINK's by PLINK's own
-criterion, but it is not the same panel: compare samples by their share of
-the panel, not raw SNP counts, or part of the apparent gain is just panel
-size (`test/run_test.sh` reports both).
-
+Filter for rare alleles and monomorphic SNPs before hand. 
 SNPs monomorphic in `--ld-samples` have undefined r² and PLINK's `--r2`
 simply omits them from its output — `ldprio` cannot evaluate their LD and
 they always survive, whether or not they're actually redundant with each
 other among the samples that matter for them. This is checked and reported
 (`note: N/M priority-pool SNPs are monomorphic in --ld-samples...`) since it
 disproportionately affects priority-pool SNPs: sites present in ancients but
-rare or absent in the modern LD-estimation sample are exactly the case.
+rare or absent in the modern LD-estimation sample are exactly the case. 
 
 ## Options
 
@@ -218,8 +190,7 @@ rare or absent in the modern LD-estimation sample are exactly the case.
 | `--keep-intermediates` | off | keep working files (the `.ld` can be ~0.5 GB) |
 | `--plink` | `plink` | PLINK 1.9 executable (plink2 is not supported) |
 
-Defaults match the Lazaridis et al. 2016 convention (`200 25 0.4`). `--step`
-was only ever consumed by `plink --indep-pairwise`; cleanup no longer uses
+`--step` was only ever consumed by `plink --indep-pairwise`; cleanup no longer uses
 it (see [How it works](#how-it-works)), so it has no effect regardless of
 value. Kept as a flag rather than removed so existing invocations that pass
 it don't break.
@@ -277,7 +248,7 @@ Python 3.7+ and PLINK 1.9 on `PATH` (or pass `--plink`). No Python
 dependencies beyond the standard library.
 
 PLINK 2 is not supported: ldprio relies on PLINK 1.9's pairwise LD report
-(`--r2`) and allele-frequency output, which PLINK 2 replaces or drops.
+(`--r2`) and allele-frequency output.
 
 `ldprio.py --version` prints the version; releases are tagged on GitHub
 (`v1.1`, …).
