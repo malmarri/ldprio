@@ -1,6 +1,6 @@
 # ldprio
 
-LD pruning that prioritizes the SNPs your low-coverage samples actually cover.
+LD pruning that prioritizes the SNPs your low-coverage samples cover.
 
 ## The problem
 
