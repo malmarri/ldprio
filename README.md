@@ -48,7 +48,7 @@ mitochondrial and unplaced contigs are dropped.
 ## Choosing the LD samples
 
 `--ld-samples` is required. It restricts r² estimation to high-quality samples
-with reliable diploid calls: modern samples, or high-coverage ancient ones.
+with reliable diploid calls.
 
 Suggested to use at least 30 samples. With few samples the r² estimates are noisy:
 unrelated SNPs pass the threshold by chance. ldprio prints a warning below 30
