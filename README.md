@@ -162,16 +162,23 @@ transversions *before* running `ldprio` instead. In testing, that kept the
 priority samples just as many transversion calls and produced a panel with
 far more transversion SNPs than any preference setting could.
 
-### Notes
+### Variant QC (`--maf`, `--geno`, `--excess-het`)
 
-Filter for rare alleles and monomorphic SNPs beforehand.
-SNPs that are monomorphic (or zero-variance) in `--ld-samples` have undefined r² —
-`ldprio` cannot evaluate their LD and they always survive, whether or not
-they are actually redundant with each other among the samples that matter for
-them. This is checked and reported
-(`note: N/M priority-pool SNPs are monomorphic (or zero-variance) in --ld-samples...`)
-since it disproportionately affects priority-pool SNPs: sites present in ancients
-but rare or absent in the modern LD-estimation sample are exactly the case.
+You can filter variants directly inside `ldprio` using `--maf`, `--geno`, and
+`--excess-het` — all calculated on `--ld-samples` and applied before
+priority-pool scoring and LD pruning:
+
+- `--maf` (e.g. `0.01`) removes rare and monomorphic SNPs in `--ld-samples`.
+- `--geno` (e.g. `0.05`) removes SNPs with high missingness in `--ld-samples`.
+- `--excess-het` (e.g. `auto` or `1e-6`) removes SNPs with excess heterozygosity
+  (paralog / mapping artifacts) while preserving homozygote excess from
+  population structure (Wahlund effect).
+
+If you run without `--maf`, SNPs that are monomorphic (or zero-variance) in
+`--ld-samples` have undefined r² — `ldprio` cannot evaluate their LD and they
+always survive, whether or not they are redundant among the priority samples.
+This is checked and reported
+(`note: N/M priority-pool SNPs are monomorphic (or zero-variance) in --ld-samples...`).
 
 ## Options
 
