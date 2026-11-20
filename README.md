@@ -186,7 +186,7 @@ but rare or absent in the modern LD-estimation sample are exactly the case.
 | `--r2` | 0.4 | r² threshold |
 | `--maf` | off | minimum minor allele frequency in `--ld-samples` (e.g. `0.01`) |
 | `--geno` | off | maximum missing genotype rate in `--ld-samples` (e.g. `0.05`) |
-| `--hwe` | off | minimum Hardy-Weinberg equilibrium exact p-value in `--ld-samples` (e.g. `1e-6`) |
+| `--excess-het` | off | maximum normalized excess heterozygosity `(-F_IS = (H_obs - H_exp) / H_exp)` in `--ld-samples` (e.g. `0.25`); sample-size-independent and preserves Wahlund homozygote excess |
 | `--weighting` | `adaptive` | how blocks contested between nominated samples are settled: `adaptive`, `inverse`, or `fair` |
 | `--prefer-transversions` | off | among otherwise equal SNPs, keep transversions over transitions |
 | `--report` | off | also write a self-contained HTML report (`<out>.report.html`) |

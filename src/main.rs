@@ -81,9 +81,9 @@ struct Args {
     #[arg(long)]
     geno: Option<f64>,
 
-    /// Minimum Hardy-Weinberg equilibrium exact p-value in --ld-samples (e.g. 1e-6)
-    #[arg(long)]
-    hwe: Option<f64>,
+    /// Maximum excess heterozygosity (-F_IS = (H_obs - H_exp)/H_exp) in --ld-samples (e.g. 0.25)
+    #[arg(long = "excess-het")]
+    excess_het: Option<f64>,
 
     /// How blocks contested between nominated samples are settled
     #[arg(long, value_enum, default_value_t = WeightingArg::Adaptive)]
@@ -140,9 +140,12 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
             return Err(format!("ERROR: --geno must be in [0, 1], got {}", geno));
         }
     }
-    if let Some(hwe) = args.hwe {
-        if !(hwe > 0.0 && hwe <= 1.0) {
-            return Err(format!("ERROR: --hwe must be in (0, 1], got {}", hwe));
+    if let Some(ex) = args.excess_het {
+        if !(ex > 0.0 && ex <= 1.0) {
+            return Err(format!(
+                "ERROR: --excess-het must be in (0, 1], got {}",
+                ex
+            ));
         }
     }
     if args.window == 0 {
@@ -211,7 +214,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     let qc = QcFilters {
         max_geno: args.geno,
         min_maf: args.maf,
-        min_hwe: args.hwe,
+        max_excess_het: args.excess_het,
     };
     let (variants, prio_calls, ld_matrix, qc_stats) = scan_bed(
         Path::new(&format!("{}.bed", args.bfile)),
@@ -232,8 +235,12 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
         if let Some(m) = args.maf {
             parts.push(format!("--maf {} [{}]", m, fmt_int(qc_stats.dropped_maf)));
         }
-        if let Some(h) = args.hwe {
-            parts.push(format!("--hwe {:e} [{}]", h, fmt_int(qc_stats.dropped_hwe)));
+        if let Some(ex) = args.excess_het {
+            parts.push(format!(
+                "--excess-het {} [{}]",
+                ex,
+                fmt_int(qc_stats.dropped_excess_het)
+            ));
         }
         let summary = parts.join(", ");
         eprintln!(

@@ -1,6 +1,6 @@
 [package]
 name = "ldprio"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2021"
 description = "LD pruning that prioritizes SNPs in low-coverage samples (native Rust, no PLINK required)"
 
@@ -9,5 +9,5 @@ clap = { version = "4", features = ["derive"] }
 rayon = "1.10"
 
 [profile.release]
-lto = true
+lto = "thin"
 codegen-units = 1

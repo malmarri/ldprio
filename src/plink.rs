@@ -238,78 +238,36 @@ impl Bim {
     }
 }
 
-/// Exact Hardy-Weinberg equilibrium p-value (Wigginton, Cutler & Abecasis 2005, AJHG),
-/// matching PLINK 1.9's exact HWE test.
-pub fn hwe_exact_p(obs_hets: usize, obs_hom1: usize, obs_hom2: usize) -> f64 {
-    let obs_homr = obs_hom1.min(obs_hom2);
-    let obs_homc = obs_hom1.max(obs_hom2);
-    let rare_copies = 2 * obs_homr + obs_hets;
-    let genotypes = obs_hets + obs_homc + obs_homr;
-    if genotypes == 0 || rare_copies == 0 {
-        return 1.0;
+/// Normalized excess heterozygosity (`-F_IS = (H_obs - H_exp) / H_exp`).
+/// Positive values indicate excess heterozygotes (e.g. paralogs / mapping artifacts,
+/// up to +1.0 for 100% het at MAF 0.5); negative values indicate homozygote excess
+/// (e.g. Wahlund effect in multi-population panels) and are never filtered.
+/// Independent of sample size N.
+pub fn het_excess(obs_hets: usize, obs_hom1: usize, obs_hom2: usize) -> f64 {
+    let n = obs_hets + obs_hom1 + obs_hom2;
+    if n == 0 {
+        return 0.0;
     }
-
-    let mut het_probs = vec![0.0f64; rare_copies + 1];
-    // Anchor at the midpoint of the distribution to avoid floating-point underflow
-    let mut mid = ((rare_copies as u64) * (2 * (genotypes as u64) - (rare_copies as u64))
-        / (2 * (genotypes as u64))) as usize;
-    if (rare_copies & 1) != (mid & 1) {
-        mid += 1;
+    let nf = n as f64;
+    let p = (obs_hets + 2 * obs_hom2) as f64 / (2.0 * nf);
+    let h_exp = 2.0 * p * (1.0 - p);
+    if h_exp <= 0.0 {
+        return 0.0;
     }
-    if mid > rare_copies {
-        mid -= 2;
-    }
-
-    het_probs[mid] = 1.0;
-    let mut sum = 1.0f64;
-
-    // Recurse downward from mid
-    let mut curr_hets = mid;
-    let mut curr_homr = (rare_copies - mid) / 2;
-    let mut curr_homc = genotypes - curr_hets - curr_homr;
-    while curr_hets >= 2 {
-        let next = het_probs[curr_hets] * (curr_hets as f64) * ((curr_hets - 1) as f64)
-            / (4.0 * ((curr_homr + 1) as f64) * ((curr_homc + 1) as f64));
-        het_probs[curr_hets - 2] = next;
-        sum += next;
-        curr_hets -= 2;
-        curr_homr += 1;
-        curr_homc += 1;
-    }
-
-    // Recurse upward from mid
-    curr_hets = mid;
-    curr_homr = (rare_copies - mid) / 2;
-    curr_homc = genotypes - curr_hets - curr_homr;
-    while curr_hets + 2 <= rare_copies {
-        let next = het_probs[curr_hets] * 4.0 * (curr_homr as f64) * (curr_homc as f64)
-            / (((curr_hets + 2) as f64) * ((curr_hets + 1) as f64));
-        het_probs[curr_hets + 2] = next;
-        sum += next;
-        curr_hets += 2;
-        curr_homr -= 1;
-        curr_homc -= 1;
-    }
-
-    let target = het_probs[obs_hets];
-    let tol = target * 1e-12;
-    let p_sum: f64 = het_probs
-        .iter()
-        .filter(|&&p| p <= target + tol)
-        .sum();
-    (p_sum / sum).min(1.0)
+    let h_obs = (obs_hets as f64) / nf;
+    (h_obs - h_exp) / h_exp
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QcFilters {
     pub max_geno: Option<f64>,
     pub min_maf: Option<f64>,
-    pub min_hwe: Option<f64>,
+    pub max_excess_het: Option<f64>,
 }
 
 impl QcFilters {
     pub fn is_active(&self) -> bool {
-        self.max_geno.is_some() || self.min_maf.is_some() || self.min_hwe.is_some()
+        self.max_geno.is_some() || self.min_maf.is_some() || self.max_excess_het.is_some()
     }
 }
 
@@ -317,12 +275,12 @@ impl QcFilters {
 pub struct QcStats {
     pub dropped_geno: usize,
     pub dropped_maf: usize,
-    pub dropped_hwe: usize,
+    pub dropped_excess_het: usize,
 }
 
 impl QcStats {
     pub fn total_dropped(&self) -> usize {
-        self.dropped_geno + self.dropped_maf + self.dropped_hwe
+        self.dropped_geno + self.dropped_maf + self.dropped_excess_het
     }
 }
 
@@ -493,11 +451,11 @@ pub fn scan_bed(
                 continue;
             }
         }
-        if let Some(min_hwe) = qc.min_hwe {
+        if let Some(max_excess_het) = qc.max_excess_het {
             let n_hom1 = (n_val - n_het - n_hom2) as usize;
-            let p = hwe_exact_p(n_het as usize, n_hom1, n_hom2 as usize);
-            if p < min_hwe {
-                qc_stats.dropped_hwe += 1;
+            let ex = het_excess(n_het as usize, n_hom1, n_hom2 as usize);
+            if ex > max_excess_het + 1e-12 {
+                qc_stats.dropped_excess_het += 1;
                 continue;
             }
         }

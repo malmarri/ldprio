@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ldprio::ld::{build_ld_graph, LdMatrix};
-use ldprio::plink::{hwe_exact_p, scan_bed, Bim, Fam, QcFilters};
+use ldprio::plink::{het_excess, scan_bed, Bim, Fam, QcFilters};
 
 /// Simple deterministic PRNG (xorshift64*) so tests are 100% reproducible with zero deps.
 struct Rng(u64);
@@ -679,21 +679,16 @@ fn test_large_scale_100k_snps_stability_and_thread_determinism() {
 }
 
 #[test]
-fn test_ld_sample_qc_filters_geno_maf_hwe() {
-    // 1. Unit-check Wigginton et al. (2005) exact HWE p-values against known reference values
-    // Perfect HWE: (50 het, 25 hom1, 25 hom2) -> p == 1.0
-    assert!((hwe_exact_p(50, 25, 25) - 1.0).abs() < 1e-12);
-    // Monomorphic: (0 het, 100 hom1, 0 hom2) -> p == 1.0
-    assert!((hwe_exact_p(0, 100, 0) - 1.0).abs() < 1e-12);
-    // Extreme excess homozygosity: (0 het, 50 hom1, 50 hom2) -> p << 1e-20
-    assert!(hwe_exact_p(0, 50, 50) < 1e-20);
-    // Extreme excess heterozygosity: (100 het, 0 hom1, 0 hom2) -> p << 1e-20
-    assert!(hwe_exact_p(100, 0, 0) < 1e-20);
-    // Classic Wigginton (2005) example: (hets=57, hom1=14, hom2=50) -> p ~ 0.842
-    let p_wig = hwe_exact_p(57, 14, 50);
-    assert!(p_wig > 0.80 && p_wig < 0.90, "unexpected HWE p: {}", p_wig);
+fn test_ld_sample_qc_filters_geno_maf_excess_het() {
+    // 1. Unit-check excess heterozygosity (-F_IS = (H_obs - H_exp) / H_exp)
+    assert!(het_excess(50, 25, 25).abs() < 1e-12); // perfect HWE -> 0.0
+    assert!(het_excess(0, 100, 0).abs() < 1e-12); // monomorphic -> 0.0
+    assert!((het_excess(0, 50, 50) - (-1.0)).abs() < 1e-12); // Wahlund hom excess -> -1.0 (kept!)
+    assert!((het_excess(100, 0, 0) - 1.0).abs() < 1e-12); // 100% het paralog -> +1.0 (dropped!)
+    assert!((het_excess(80, 10, 10) - 0.6).abs() < 1e-12); // 60% excess het -> +0.6
+    assert!(het_excess(1, 199, 0) < 0.01); // rare singleton -> tiny (~0.0025), never falsely dropped
 
-    // 2. End-to-end CLI test of --geno, --maf, --hwe (calculated ONLY on --ld-samples!)
+    // 2. End-to-end CLI test of --geno, --maf, --excess-het (calculated ONLY on --ld-samples!)
     let dir = temp_dir("qc_filters");
     let n_ld = 100usize;
     let n_prio = 2usize;
@@ -709,47 +704,46 @@ fn test_ld_sample_qc_filters_geno_maf_hwe() {
         .map(|(f, i)| (f.as_str(), i.as_str()))
         .collect();
 
-    // 5 SNPs on chr1:
-    // snp_good: 0% miss, MAF=0.5, exact HWE (25 hom1, 50 het, 25 hom2) -> PASS
+    // 5 SNPs:
+    // snp_good (chr1): 0% miss, MAF=0.5, exact HWE (25 hom1, 50 het, 25 hom2) -> PASS
     let mut snp_good = Vec::with_capacity(n_ld + n_prio);
     snp_good.extend(std::iter::repeat(0).take(25));
     snp_good.extend(std::iter::repeat(2).take(50));
     snp_good.extend(std::iter::repeat(3).take(25));
-    snp_good.extend([0, 3]); // priority samples called
+    snp_good.extend([0, 3]);
 
-    // snp_high_miss: 20% missing in LD samples (> --geno 0.10) -> FAIL geno
+    // snp_high_miss (chr1): 20% missing in LD samples (> --geno 0.10) -> FAIL geno
     let mut snp_high_miss = snp_good.clone();
     for i in 0..20 {
         snp_high_miss[i] = 1;
     }
 
-    // snp_low_maf: 1 het out of 100 LD samples (MAF = 0.005 < --maf 0.01) -> FAIL maf
+    // snp_low_maf (chr1): 1 het out of 100 LD samples (MAF = 0.005 < --maf 0.01) -> FAIL maf
     let mut snp_low_maf = vec![0u8; n_ld + n_prio];
     snp_low_maf[0] = 2;
-    snp_low_maf[n_ld] = 3; // even though ancient has alt allele, LD-sample MAF is 0.005!
+    snp_low_maf[n_ld] = 3;
 
-    // snp_bad_hwe: 50 hom1, 0 het, 50 hom2 (p < 1e-20 < --hwe 1e-6) -> FAIL hwe
-    let mut snp_bad_hwe = Vec::with_capacity(n_ld + n_prio);
-    snp_bad_hwe.extend(std::iter::repeat(0).take(50));
-    snp_bad_hwe.extend(std::iter::repeat(3).take(50));
-    snp_bad_hwe.extend([0, 3]);
+    // snp_paralog (chr1): 10 hom1, 80 het, 10 hom2 (excess_het = +0.60 > 0.25) -> FAIL excess-het
+    let mut snp_paralog = Vec::with_capacity(n_ld + n_prio);
+    snp_paralog.extend(std::iter::repeat(0).take(10));
+    snp_paralog.extend(std::iter::repeat(2).take(80));
+    snp_paralog.extend(std::iter::repeat(3).take(10));
+    snp_paralog.extend([0, 3]);
 
-    // snp_good2: 5% missing (<= --geno 0.10), MAF=0.25, HWE ok -> PASS
-    let mut snp_good2 = Vec::with_capacity(n_ld + n_prio);
-    snp_good2.extend(std::iter::repeat(1).take(5));
-    snp_good2.extend(std::iter::repeat(0).take(54));
-    snp_good2.extend(std::iter::repeat(2).take(35));
-    snp_good2.extend(std::iter::repeat(3).take(6));
-    snp_good2.extend([3, 1]);
+    // snp_wahlund (chr2): 50 hom1, 0 het, 50 hom2 (excess_het = -1.0 <= 0.25) -> PASS!
+    let mut snp_wahlund = Vec::with_capacity(n_ld + n_prio);
+    snp_wahlund.extend(std::iter::repeat(0).take(50));
+    snp_wahlund.extend(std::iter::repeat(3).take(50));
+    snp_wahlund.extend([3, 1]);
 
     let bim_rows = [
         ("1", "snp_good", 1000, "A", "C"),
         ("1", "snp_high_miss", 2000, "A", "G"),
         ("1", "snp_low_maf", 3000, "C", "T"),
-        ("1", "snp_bad_hwe", 4000, "G", "T"),
-        ("2", "snp_good2", 5000, "A", "T"),
+        ("1", "snp_paralog", 4000, "G", "T"),
+        ("2", "snp_wahlund", 5000, "A", "T"),
     ];
-    let geno = vec![snp_good, snp_high_miss, snp_low_maf, snp_bad_hwe, snp_good2];
+    let geno = vec![snp_good, snp_high_miss, snp_low_maf, snp_paralog, snp_wahlund];
 
     let prefix = dir.join("qc_panel");
     write_plink_fileset(&prefix, &fam_refs, &bim_rows, &geno);
@@ -766,7 +760,7 @@ fn test_ld_sample_qc_filters_geno_maf_hwe() {
             "--ld-samples", ld_list.to_str().unwrap(),
             "--geno", "0.10",
             "--maf", "0.01",
-            "--hwe", "1e-6",
+            "--excess-het", "0.25",
             "--make-bed", "--report",
             "--out", out_prefix.to_str().unwrap(),
         ])
@@ -780,7 +774,7 @@ fn test_ld_sample_qc_filters_geno_maf_hwe() {
         .lines()
         .map(|s| s.to_string())
         .collect();
-    assert_eq!(kept, vec!["snp_good", "snp_good2"], "stderr:\n{}", stderr);
+    assert_eq!(kept, vec!["snp_good", "snp_wahlund"], "stderr:\n{}", stderr);
 
     let html = fs::read_to_string(format!("{}.report.html", out_prefix.display())).unwrap();
     assert!(html.contains("After LD-sample QC"));
