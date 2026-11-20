@@ -40,8 +40,8 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 
 ## How it works
 
-1. **LD-sample QC (optional):** filters autosomes by `--geno`, `--maf`, and `--excess-het` on `--ld-samples`.
-2. **Priority pool:** identifies SNPs covered by `--priority-samples`. Nominate only the sparse samples that need help.
+1. **Priority pool:** identifies SNPs covered by `--priority-samples`. Nominate only the sparse samples that need help.
+2. **LD-sample QC (optional):** filters autosomes by `--geno`, `--maf`, and `--excess-het` on `--ld-samples`.
 3. **LD graph & greedy selection:** computes exact pairwise Pearson r² on `--ld-samples` (use ≥30 high-quality diploids; avoid pseudo-haploids) across `--window` variants, keeps priority-pool SNPs first according to `--weighting`, then fills the rest in genomic order.
 4. **Cleanup:** iterates LD checks in memory until zero residual pairs above `--r2` remain within `--window`.
 
