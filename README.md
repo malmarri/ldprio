@@ -173,6 +173,26 @@ them. This is checked and reported
 since it disproportionately affects priority-pool SNPs: sites present in ancients
 but rare or absent in the modern LD-estimation sample are exactly the case.
 
+## Real-data benchmark: Southern Arc Natufians
+
+Tested on the full public 1240k dataset from the Southern Arc study — Lazaridis, Alpaslan-Roodenberg et al., *The genetic history of the Southern Arc: a bridge between West Asia and Europe*, Science (2022) ([Harvard Dataverse: `doi:10.7910/DVN/3AR0CD`](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/3AR0CD)) — containing **1,150,639 autosomal SNPs** across **5,940 individuals**.
+
+LD was estimated from 200 modern high-coverage diploid (`.DG`) samples (`--window 200 --r2 0.4`), nominating all 6 Epipaleolithic Natufian (`ISR_Natufian_EpiP`) individuals as `--priority-samples` (priority pool: 200,048 SNPs, 17.4% of the panel). `ldprio` (`--weighting adaptive`) pruned the entire 1.7 GB dataset to verified zero residual LD in **~5 seconds**, keeping **450,083 SNPs** (vs. **376,252 SNPs** for standard `plink --indep-pairwise 200 25 0.4`):
+
+| Natufian sample | Input calls | Standard PLINK | `ldprio` (`adaptive`) | Raw gain | Share-of-panel gain* |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `I1687_d` | 12,883 | 4,352 (33.8%) | **12,189 (94.6%)** | **+180%** (+7,837) | **2.34×** |
+| `I1685_d` | 15,262 | 5,270 (34.5%) | **13,630 (89.3%)** | **+159%** (+8,360) | **2.16×** |
+| `I0861_d` | 16,613 | 5,692 (34.3%) | **14,252 (85.8%)** | **+150%** (+8,560) | **2.09×** |
+| `I1069_published` | 26,699 | 8,946 (33.5%) | **21,029 (78.8%)** | **+135%** (+12,083) | **1.96×** |
+| `I1690_published` | 29,423 | 9,829 (33.4%) | **21,839 (74.2%)** | **+122%** (+12,010) | **1.86×** |
+| `I1072_d` | 122,713 | 41,854 (34.1%) | **78,850 (64.3%)** | **+88%** (+36,996) | **1.58×** |
+| **Mean share** | | **33.9%** | **81.2%** | | |
+
+*\*Share-of-panel gain adjusts for the 1.20× difference in overall pruned panel size (`450,083` vs. `376,252` SNPs).*
+
+Adding `--prefer-transversions` kept the same **81.2%** mean Natufian retention while raising transversions to **25.3%** of the pruned panel (113,452 of 447,947 SNPs).
+
 ## Options
 
 | option | default | description |
