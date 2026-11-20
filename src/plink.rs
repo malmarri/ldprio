@@ -238,36 +238,76 @@ impl Bim {
     }
 }
 
-/// Normalized excess heterozygosity (`-F_IS = (H_obs - H_exp) / H_exp`).
-/// Positive values indicate excess heterozygotes (e.g. paralogs / mapping artifacts,
-/// up to +1.0 for 100% het at MAF 0.5); negative values indicate homozygote excess
-/// (e.g. Wahlund effect in multi-population panels) and are never filtered.
-/// Independent of sample size N.
-pub fn het_excess(obs_hets: usize, obs_hom1: usize, obs_hom2: usize) -> f64 {
-    let n = obs_hets + obs_hom1 + obs_hom2;
-    if n == 0 {
-        return 0.0;
+/// Exact one-sided excess-heterozygosity p-value: P(H >= obs_hets | HWE),
+/// computed via the Wigginton, Cutler & Abecasis (2005) recurrence (matching
+/// `bcftools` ExcHet and `plink --hwe <p> keep-fewhet`).
+/// Homozygote excess (e.g. Wahlund effect in multi-population panels) yields
+/// large p-values (~0.5..1.0) and is never filtered.
+pub fn excess_het_p(obs_hets: usize, obs_hom1: usize, obs_hom2: usize) -> f64 {
+    let obs_homr = obs_hom1.min(obs_hom2);
+    let obs_homc = obs_hom1.max(obs_hom2);
+    let rare_copies = 2 * obs_homr + obs_hets;
+    let genotypes = obs_hets + obs_homc + obs_homr;
+    if genotypes == 0 || rare_copies == 0 {
+        return 1.0;
     }
-    let nf = n as f64;
-    let p = (obs_hets + 2 * obs_hom2) as f64 / (2.0 * nf);
-    let h_exp = 2.0 * p * (1.0 - p);
-    if h_exp <= 0.0 {
-        return 0.0;
+
+    let mut het_probs = vec![0.0f64; rare_copies + 1];
+    let mut mid = ((rare_copies as u64) * (2 * (genotypes as u64) - (rare_copies as u64))
+        / (2 * (genotypes as u64))) as usize;
+    if (rare_copies & 1) != (mid & 1) {
+        mid += 1;
     }
-    let h_obs = (obs_hets as f64) / nf;
-    (h_obs - h_exp) / h_exp
+    if mid > rare_copies {
+        mid -= 2;
+    }
+
+    het_probs[mid] = 1.0;
+    let mut sum = 1.0f64;
+
+    // Recurse downward from mid
+    let mut curr_hets = mid;
+    let mut curr_homr = (rare_copies - mid) / 2;
+    let mut curr_homc = genotypes - curr_hets - curr_homr;
+    while curr_hets >= 2 {
+        let next = het_probs[curr_hets] * (curr_hets as f64) * ((curr_hets - 1) as f64)
+            / (4.0 * ((curr_homr + 1) as f64) * ((curr_homc + 1) as f64));
+        het_probs[curr_hets - 2] = next;
+        sum += next;
+        curr_hets -= 2;
+        curr_homr += 1;
+        curr_homc += 1;
+    }
+
+    // Recurse upward from mid
+    curr_hets = mid;
+    curr_homr = (rare_copies - mid) / 2;
+    curr_homc = genotypes - curr_hets - curr_homr;
+    while curr_hets + 2 <= rare_copies {
+        let next = het_probs[curr_hets] * 4.0 * (curr_homr as f64) * (curr_homc as f64)
+            / (((curr_hets + 2) as f64) * ((curr_hets + 1) as f64));
+        het_probs[curr_hets + 2] = next;
+        sum += next;
+        curr_hets += 2;
+        curr_homr -= 1;
+        curr_homc -= 1;
+    }
+
+    // Upper tail: P(H >= obs_hets)
+    let p_upper: f64 = het_probs[obs_hets..].iter().sum();
+    (p_upper / sum).min(1.0)
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QcFilters {
     pub max_geno: Option<f64>,
     pub min_maf: Option<f64>,
-    pub max_excess_het: Option<f64>,
+    pub min_excess_het_p: Option<f64>,
 }
 
 impl QcFilters {
     pub fn is_active(&self) -> bool {
-        self.max_geno.is_some() || self.min_maf.is_some() || self.max_excess_het.is_some()
+        self.max_geno.is_some() || self.min_maf.is_some() || self.min_excess_het_p.is_some()
     }
 }
 
@@ -451,10 +491,10 @@ pub fn scan_bed(
                 continue;
             }
         }
-        if let Some(max_excess_het) = qc.max_excess_het {
+        if let Some(min_p) = qc.min_excess_het_p {
             let n_hom1 = (n_val - n_het - n_hom2) as usize;
-            let ex = het_excess(n_het as usize, n_hom1, n_hom2 as usize);
-            if ex > max_excess_het + 1e-12 {
+            let p = excess_het_p(n_het as usize, n_hom1, n_hom2 as usize);
+            if p < min_p {
                 qc_stats.dropped_excess_het += 1;
                 continue;
             }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ldprio::ld::{build_ld_graph, LdMatrix};
-use ldprio::plink::{het_excess, scan_bed, Bim, Fam, QcFilters};
+use ldprio::plink::{excess_het_p, scan_bed, Bim, Fam, QcFilters};
 
 /// Simple deterministic PRNG (xorshift64*) so tests are 100% reproducible with zero deps.
 struct Rng(u64);
@@ -680,13 +680,13 @@ fn test_large_scale_100k_snps_stability_and_thread_determinism() {
 
 #[test]
 fn test_ld_sample_qc_filters_geno_maf_excess_het() {
-    // 1. Unit-check excess heterozygosity (-F_IS = (H_obs - H_exp) / H_exp)
-    assert!(het_excess(50, 25, 25).abs() < 1e-12); // perfect HWE -> 0.0
-    assert!(het_excess(0, 100, 0).abs() < 1e-12); // monomorphic -> 0.0
-    assert!((het_excess(0, 50, 50) - (-1.0)).abs() < 1e-12); // Wahlund hom excess -> -1.0 (kept!)
-    assert!((het_excess(100, 0, 0) - 1.0).abs() < 1e-12); // 100% het paralog -> +1.0 (dropped!)
-    assert!((het_excess(80, 10, 10) - 0.6).abs() < 1e-12); // 60% excess het -> +0.6
-    assert!(het_excess(1, 199, 0) < 0.01); // rare singleton -> tiny (~0.0025), never falsely dropped
+    // 1. Unit-check exact one-sided excess-heterozygosity p-value P(H >= H_obs | HWE)
+    assert!(excess_het_p(50, 25, 25) > 0.5); // perfect HWE -> large p
+    assert!((excess_het_p(0, 100, 0) - 1.0).abs() < 1e-12); // monomorphic -> 1.0
+    assert!((excess_het_p(0, 50, 50) - 1.0).abs() < 1e-12); // Wahlund hom excess -> p == 1.0 (kept!)
+    assert!(excess_het_p(100, 0, 0) < 1e-20); // 100% het paralog -> tiny p (dropped!)
+    assert!(excess_het_p(80, 10, 10) < 1e-8); // strong excess het -> tiny p (dropped!)
+    assert!((excess_het_p(1, 199, 0) - 1.0).abs() < 1e-12); // rare singleton -> p == 1.0 (kept!)
 
     // 2. End-to-end CLI test of --geno, --maf, --excess-het (calculated ONLY on --ld-samples!)
     let dir = temp_dir("qc_filters");
@@ -760,7 +760,7 @@ fn test_ld_sample_qc_filters_geno_maf_excess_het() {
             "--ld-samples", ld_list.to_str().unwrap(),
             "--geno", "0.10",
             "--maf", "0.01",
-            "--excess-het", "0.25",
+            "--excess-het", "1e-6",
             "--make-bed", "--report",
             "--out", out_prefix.to_str().unwrap(),
         ])

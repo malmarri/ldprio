@@ -81,9 +81,9 @@ struct Args {
     #[arg(long)]
     geno: Option<f64>,
 
-    /// Maximum excess heterozygosity (-F_IS = (H_obs - H_exp)/H_exp) in --ld-samples (e.g. 0.25)
+    /// Minimum one-sided exact excess-heterozygosity p-value in --ld-samples (e.g. 1e-6, or 'auto' for Bonferroni 0.05/n_snps)
     #[arg(long = "excess-het")]
-    excess_het: Option<f64>,
+    excess_het: Option<String>,
 
     /// How blocks contested between nominated samples are settled
     #[arg(long, value_enum, default_value_t = WeightingArg::Adaptive)]
@@ -140,14 +140,25 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
             return Err(format!("ERROR: --geno must be in [0, 1], got {}", geno));
         }
     }
-    if let Some(ex) = args.excess_het {
-        if !(ex > 0.0 && ex <= 1.0) {
-            return Err(format!(
-                "ERROR: --excess-het must be in (0, 1], got {}",
-                ex
-            ));
+    let excess_het_mode: Option<Result<f64, ()>> = match args.excess_het.as_deref() {
+        None => None,
+        Some(s) if s.eq_ignore_ascii_case("auto") => Some(Err(())), // Err(()) = auto Bonferroni
+        Some(s) => {
+            let p: f64 = s.parse().map_err(|_| {
+                format!(
+                    "ERROR: --excess-het must be a p-value in (0, 1] or 'auto', got '{}'",
+                    s
+                )
+            })?;
+            if !(p > 0.0 && p <= 1.0) {
+                return Err(format!(
+                    "ERROR: --excess-het must be in (0, 1] or 'auto', got {}",
+                    p
+                ));
+            }
+            Some(Ok(p))
         }
-    }
+    };
     if args.window == 0 {
         return Err(format!(
             "ERROR: --window must be a positive integer, got {}",
@@ -211,10 +222,16 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     let prio_indices = resolve_samples(&args.priority_samples, &fam, "--priority-samples")?;
     let ld_indices = resolve_samples(&args.ld_samples, &fam, "--ld-samples")?;
 
+    let min_excess_het_p = match excess_het_mode {
+        None => None,
+        Some(Ok(p)) => Some(p),
+        Some(Err(())) => Some(0.05 / (n_auto as f64)),
+    };
+
     let qc = QcFilters {
         max_geno: args.geno,
         min_maf: args.maf,
-        max_excess_het: args.excess_het,
+        min_excess_het_p,
     };
     let (variants, prio_calls, ld_matrix, qc_stats) = scan_bed(
         Path::new(&format!("{}.bed", args.bfile)),
@@ -235,12 +252,13 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
         if let Some(m) = args.maf {
             parts.push(format!("--maf {} [{}]", m, fmt_int(qc_stats.dropped_maf)));
         }
-        if let Some(ex) = args.excess_het {
-            parts.push(format!(
-                "--excess-het {} [{}]",
-                ex,
-                fmt_int(qc_stats.dropped_excess_het)
-            ));
+        if let Some(p) = min_excess_het_p {
+            let tag = if matches!(excess_het_mode, Some(Err(()))) {
+                format!("--excess-het auto ({:.2e})", p)
+            } else {
+                format!("--excess-het {:e}", p)
+            };
+            parts.push(format!("{} [{}]", tag, fmt_int(qc_stats.dropped_excess_het)));
         }
         let summary = parts.join(", ");
         eprintln!(
