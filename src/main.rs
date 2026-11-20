@@ -12,10 +12,10 @@ use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
 
-use crate::ld::build_ld_graph;
+use crate::ld::{build_ld_graph, find_backfill_candidates};
 use crate::plink::{preview_list, resolve_samples, scan_bed, write_bed_subset, Bim, Fam, QcFilters};
 use crate::report::{fmt_int, write_report, ReportData};
-use crate::select::{greedy_select, PriorityPool, Weighting};
+use crate::select::{backfill_select, greedy_select, PriorityPool, Weighting};
 
 const POOL_WARN_FRACTION: f64 = 0.70;
 const MIN_LD_SAMPLES: usize = 30;
@@ -420,6 +420,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     // ---- Cleanup passes to convergence (all in-memory) ----------------------
     let mut converged = false;
     let mut passes: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut total_cleanup_removed = 0usize;
     for pass in 1..=args.max_cleanup {
         let (adj_i, n_pairs_i) =
             build_ld_graph(&ld_matrix, &current, &variants, args.window, args.r2);
@@ -431,6 +432,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
             (kept_i, rem)
         };
         current = next;
+        total_cleanup_removed += n_removed;
         let n_keep = current.len();
         passes.push((pass, n_pairs_i, n_removed, n_keep));
         eprintln!(
@@ -443,6 +445,38 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
         if n_pairs_i == 0 {
             converged = true;
             break;
+        }
+    }
+
+    // ---- Backfill recovery --------------------------------------------------
+    // If cleanup removed SNPs, previously dropped SNPs whose only kept LD partner
+    // was removed during cleanup may now have no LD with any kept SNP within
+    // `--window`. Recover them (priority SNPs first), preserving 0 residual LD.
+    let mut backfill: Option<(usize, usize, usize)> = None;
+    if converged && total_cleanup_removed > 0 {
+        let candidates =
+            find_backfill_candidates(&ld_matrix, &current, &variants, args.window, args.r2);
+        if !candidates.is_empty() {
+            let (recovered, n_added, n_added_prio) = backfill_select(
+                &current,
+                &candidates,
+                &ld_matrix,
+                &priority,
+                &variants,
+                args.window,
+                args.r2,
+                prefer_tv,
+            );
+            if n_added > 0 {
+                current = recovered;
+                backfill = Some((n_added, n_added_prio, current.len()));
+                eprintln!(
+                    "      backfill: recovered {} SNPs ({} priority) -> {} SNPs",
+                    fmt_int(n_added),
+                    fmt_int(n_added_prio),
+                    fmt_int(current.len())
+                );
+            }
         }
     }
 
@@ -531,6 +565,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
                 prio_final: n_prio_final,
                 greedy: n_greedy,
                 passes,
+                backfill,
                 final_n: current.len(),
                 converged,
                 samples: sample_rows,

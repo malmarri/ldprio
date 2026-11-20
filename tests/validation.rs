@@ -782,3 +782,148 @@ fn test_ld_sample_qc_filters_geno_maf_excess_het() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_backfill_recovers_orphaned_priority_snp_after_cleanup() {
+    // Reproduces the exact B -- C -- D cleanup-orphan scenario:
+    // - Pass 1 (window=6): C (non-prio) is in LD with B (priority, distant from D? No:
+    //   let B be in LD with C ONLY, and C be in LD with distant D which is > window=6 away!).
+    //   Wait: if B is priority and C is priority (higher weight than B), pass 1 keeps C and
+    //   drops B; D (even higher weight than C) is > window=6 away from C so pass 1 keeps D too.
+    //   After pass 1 collapses filler blocks between C and D, cleanup pass 1 sees (C, D),
+    //   keeps D and drops C! Now B has NO LD with D or any kept SNP -> backfill MUST recover B!
+    let dir = temp_dir("backfill_bcd");
+    let mut rng = Rng::new(7777);
+    let n_ld = 60usize;
+    let n_prio = 3usize; // P0 (most calls -> lowest weight, covers B), P1 (med, covers C), P2 (fewest -> highest weight, covers D)
+    let n_fam = n_ld + n_prio;
+
+    let mut fam_owned = Vec::new();
+    for i in 0..n_ld {
+        fam_owned.push(("LD".to_string(), format!("M{}", i)));
+    }
+    for i in 0..n_prio {
+        fam_owned.push(("ANC".to_string(), format!("P{}", i)));
+    }
+    let fam_refs: Vec<(&str, &str)> = fam_owned.iter().map(|(f, i)| (f.as_str(), i.as_str())).collect();
+
+    // Construct genotypes for B, C, D such that:
+    // r^2(B, C) >= 0.4, r^2(C, D) >= 0.4, AND r^2(B, D) < 0.1!
+    // Easy: take independent random halves!
+    // C = 60 samples (random 0/2/3).
+    // B agrees with C on first 45 samples (r^2 ~ 0.56), random on last 15.
+    // D agrees with C on last 45 samples (r^2 ~ 0.56), flipped/independent on first 15?
+    // Even cleaner: deterministic orthogonal construction on 60 samples:
+    // C[0..30] = 0, C[30..60] = 3 (binary +/-1)
+    // B[0..25] = 0, B[25..30] = 3, B[30..55] = 3, B[55..60] = 0 -> agreement with C = 50/60 -> r = 2/3, r^2 = 0.444!
+    // D[0..5] = 3, D[5..30] = 0, D[30..35] = 0, D[35..60] = 3 -> agreement with C = 50/60 -> r = 2/3, r^2 = 0.444!
+    // Agreement(B, D) = 40/60 -> r = 1/3, r^2 = 0.111 < 0.4!
+    let mut pat_c = vec![0u8; n_ld];
+    let mut pat_b = vec![0u8; n_ld];
+    let mut pat_d = vec![0u8; n_ld];
+    for i in 0..n_ld {
+        pat_c[i] = if i < 30 { 0 } else { 3 };
+        pat_b[i] = if (0..25).contains(&i) || (55..60).contains(&i) { 0 } else { 3 };
+        pat_d[i] = if (5..30).contains(&i) || (30..35).contains(&i) { 0 } else { 3 };
+    }
+    // Two filler patterns independent of B, C, D
+    let pat_f1: Vec<u8> = (0..n_ld).map(|_| match rng.next_u64() % 3 { 0 => 0, 1 => 2, _ => 3 }).collect();
+    let pat_f2: Vec<u8> = (0..n_ld).map(|_| match rng.next_u64() % 3 { 0 => 0, 1 => 2, _ => 3 }).collect();
+
+    let make_row = |ld_pat: &[u8], p0: u8, p1: u8, p2: u8| {
+        let mut r = ld_pat.to_vec();
+        r.push(p0);
+        r.push(p1);
+        r.push(p2);
+        r
+    };
+
+    let mut bim_owned: Vec<(String, String, usize, String, String)> = Vec::new();
+    let mut geno: Vec<Vec<u8>> = Vec::new();
+    let mut push = |chr: &str, id: &str, bp: usize, row: Vec<u8>| {
+        bim_owned.push((chr.to_string(), id.to_string(), bp, "A".to_string(), "C".to_string()));
+        geno.push(row);
+    };
+
+    // Chr1: B (pos 0, covered by P0), C (pos 1, covered by P1),
+    // 6 copies of F1 (pos 2..7), 6 copies of F2 (pos 8..13),
+    // D (pos 14, covered by P2) -> distance(C, D) = 13 > window=6!
+    push("1", "snp_B", 1000, make_row(&pat_b, 0, 1, 1));
+    push("1", "snp_C", 2000, make_row(&pat_c, 1, 0, 1));
+    for i in 0..6 {
+        push("1", &format!("f1_{}", i), 3000 + i * 100, make_row(&pat_f1, 1, 1, 1));
+    }
+    for i in 0..6 {
+        push("1", &format!("f2_{}", i), 5000 + i * 100, make_row(&pat_f2, 1, 1, 1));
+    }
+    push("1", "snp_D", 9000, make_row(&pat_d, 1, 1, 0));
+
+    // Give P0 10 extra calls on chr2, P1 3 extra calls on chr2, P2 0 extra calls
+    // so under `--weighting inverse`, weight(P2) > weight(P1) > weight(P0):
+    // Pass 1 keeps C (drops B) and keeps D; cleanup keeps D (drops C); backfill MUST recover B!
+    for i in 0..10 {
+        let rand_pat: Vec<u8> = (0..n_ld).map(|_| match rng.next_u64() % 3 { 0 => 0, 1 => 2, _ => 3 }).collect();
+        let p1_call = if i < 3 { 0 } else { 1 };
+        push("2", &format!("c2_{}", i), 1000 + i * 1000, make_row(&rand_pat, 0, p1_call, 1));
+    }
+
+    let bim_refs: Vec<(&str, &str, usize, &str, &str)> = bim_owned
+        .iter()
+        .map(|(c, id, bp, a1, a2)| (c.as_str(), id.as_str(), *bp, a1.as_str(), a2.as_str()))
+        .collect();
+    let prefix = dir.join("bcd");
+    write_plink_fileset(&prefix, &fam_refs, &bim_refs, &geno);
+    let ld_list = dir.join("ld.txt");
+    fs::write(&ld_list, (0..n_ld).map(|i| format!("M{}\n", i)).collect::<String>()).unwrap();
+    let prio_list = dir.join("prio.txt");
+    fs::write(&prio_list, "P0\nP1\nP2\n").unwrap();
+
+    let out_prefix = dir.join("bcd_out");
+    let res = Command::new(ldprio_bin())
+        .args([
+            "--bfile", prefix.to_str().unwrap(),
+            "--priority-samples", prio_list.to_str().unwrap(),
+            "--ld-samples", ld_list.to_str().unwrap(),
+            "--window", "6",
+            "--r2", "0.4",
+            "--weighting", "inverse",
+            "--make-bed", "--report",
+            "--out", out_prefix.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&res.stderr);
+    assert!(res.status.success(), "backfill run failed:\n{}", stderr);
+
+    let kept: Vec<String> = fs::read_to_string(out_prefix.with_extension("snplist"))
+        .unwrap()
+        .lines()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert!(kept.contains(&"snp_D".to_string()), "snp_D must be kept: {:?}", kept);
+    assert!(!kept.contains(&"snp_C".to_string()), "snp_C must be dropped in cleanup: {:?}", kept);
+    assert!(kept.contains(&"snp_B".to_string()), "snp_B MUST be recovered by backfill! stderr:\n{}", stderr);
+    assert!(stderr.contains("backfill: recovered"), "expected backfill log line:\n{}", stderr);
+
+    // Independent verification: final output MUST still have 0 residual LD within window=6!
+    let out_fam = Fam::read(&out_prefix.with_extension("fam")).unwrap();
+    let out_bim = Bim::read(&out_prefix.with_extension("bim")).unwrap();
+    let ld_idx: Vec<usize> = (0..n_ld).collect();
+    let prio_idx: Vec<usize> = (n_ld..n_fam).collect();
+    let (_, _, out_ld, _) = scan_bed(
+        &out_prefix.with_extension("bed"),
+        out_fam.samples.len(),
+        out_bim.n_input,
+        &out_bim.variants,
+        &prio_idx,
+        &ld_idx,
+        QcFilters::default(),
+    )
+    .unwrap();
+    let all_out: Vec<usize> = (0..out_bim.variants.len()).collect();
+    let (_, residual) = build_ld_graph(&out_ld, &all_out, &out_bim.variants, 6, 0.4);
+    assert_eq!(residual, 0, "backfilled output must still have 0 residual LD!");
+
+    let _ = fs::remove_dir_all(&dir);
+}

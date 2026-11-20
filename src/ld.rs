@@ -154,3 +154,76 @@ pub fn build_ld_graph(
     }
     (adj, n_pairs)
 }
+
+/// Find all dropped autosomal SNPs that have zero LD partners (>= `r2_thresh`)
+/// within `±(window - 1)` variants of their insertion position in `kept` on the
+/// same chromosome. Runs in parallel across chromosomes.
+pub fn find_backfill_candidates(
+    ld: &LdMatrix,
+    kept: &[usize],
+    variants: &[Variant],
+    window: usize,
+    r2_thresh: f64,
+) -> Vec<usize> {
+    let n_snps = variants.len();
+    if window < 2 || kept.len() == n_snps {
+        return Vec::new();
+    }
+
+    let mut is_kept = vec![false; n_snps];
+    for &k in kept {
+        is_kept[k] = true;
+    }
+
+    // Group kept and dropped SNPs by chromosome (both sorted by auto_idx = genomic order)
+    let mut kept_by_chr: [Vec<usize>; 23] = std::array::from_fn(|_| Vec::new());
+    let mut drop_by_chr: [Vec<usize>; 23] = std::array::from_fn(|_| Vec::new());
+    for (k, v) in variants.iter().enumerate() {
+        if is_kept[k] {
+            kept_by_chr[v.chrom as usize].push(k);
+        } else {
+            drop_by_chr[v.chrom as usize].push(k);
+        }
+    }
+
+    let reach = window - 1;
+    let per_chr: Vec<Vec<usize>> = (1..=22usize)
+        .into_par_iter()
+        .map(|c| {
+            let kchr = &kept_by_chr[c];
+            let dchr = &drop_by_chr[c];
+            if dchr.is_empty() {
+                return Vec::new();
+            }
+            if kchr.is_empty() {
+                return dchr.clone();
+            }
+            let mut eligible = Vec::new();
+            let mut pos = 0usize; // first index in kchr with kchr[pos] > d
+            for &d in dchr {
+                while pos < kchr.len() && kchr[pos] < d {
+                    pos += 1;
+                }
+                if ld.is_constant[d] {
+                    eligible.push(d);
+                    continue;
+                }
+                let lo = pos.saturating_sub(reach);
+                let hi = (pos + reach).min(kchr.len());
+                let mut conflict = false;
+                for &k in &kchr[lo..hi] {
+                    if ld.pair_r2_ge(d, k, r2_thresh) {
+                        conflict = true;
+                        break;
+                    }
+                }
+                if !conflict {
+                    eligible.push(d);
+                }
+            }
+            eligible
+        })
+        .collect();
+
+    per_chr.into_iter().flatten().collect()
+}

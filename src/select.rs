@@ -375,3 +375,147 @@ pub fn greedy_select(
         .map(|u| surviving[u])
         .collect()
 }
+
+/// Recover dropped SNPs that have no LD with `kept` (candidates from
+/// `find_backfill_candidates`), inserting priority SNPs first (respecting
+/// `--weighting` and `--prefer-transversions`), then non-priority SNPs.
+/// Each accepted SNP is checked against previously accepted backfill SNPs
+/// within `±(window - 1)` in the growing kept set, guaranteeing 0 residual LD.
+/// Returns `(new_kept_sorted, n_added, n_added_priority)`.
+pub fn backfill_select(
+    kept: &[usize],
+    candidates: &[usize],
+    ld: &crate::ld::LdMatrix,
+    priority: &PriorityPool,
+    variants: &[Variant],
+    window: usize,
+    r2_thresh: f64,
+    prefer_tv: bool,
+) -> (Vec<usize>, usize, usize) {
+    if candidates.is_empty() || window < 2 {
+        return (kept.to_vec(), 0, 0);
+    }
+
+    // Order candidates: priority first (using the active weighting), then non-priority
+    let mut ordered: Vec<usize> = Vec::with_capacity(candidates.len());
+    let mut prio_cands: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|&k| priority.in_pool(k))
+        .collect();
+    let mut nonprio_cands: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|&k| !priority.in_pool(k))
+        .collect();
+
+    match priority {
+        PriorityPool::Inverse(weights) => {
+            prio_cands.sort_by(|&a, &b| {
+                quantize_weight(weights[b])
+                    .cmp(&quantize_weight(weights[a]))
+                    .then_with(|| (prefer_tv && variants[b].is_tv).cmp(&(prefer_tv && variants[a].is_tv)))
+                    .then_with(|| a.cmp(&b))
+            });
+        }
+        PriorityPool::Adaptive { cover, inv_cov } => {
+            // Count how many SNPs each priority sample already has in `kept`
+            let mut k_kept = vec![0usize; inv_cov.len()];
+            for &k in kept {
+                for &s in &cover[k] {
+                    k_kept[s as usize] += 1;
+                }
+            }
+            let score = |k: usize| -> f64 {
+                cover[k]
+                    .iter()
+                    .map(|&s| inv_cov[s as usize] / ((k_kept[s as usize] + 1) as f64))
+                    .sum()
+            };
+            prio_cands.sort_by(|&a, &b| {
+                quantize_weight(score(b))
+                    .cmp(&quantize_weight(score(a)))
+                    .then_with(|| (prefer_tv && variants[b].is_tv).cmp(&(prefer_tv && variants[a].is_tv)))
+                    .then_with(|| a.cmp(&b))
+            });
+        }
+        PriorityPool::Fair(cover) => {
+            // Order by fewest already-kept SNPs among covering samples, then most-shared, then TV
+            let mut max_s = 0usize;
+            for &k in kept.iter().chain(prio_cands.iter()) {
+                for &s in &cover[k] {
+                    max_s = max_s.max(s as usize + 1);
+                }
+            }
+            let mut k_kept = vec![0usize; max_s];
+            for &k in kept {
+                for &s in &cover[k] {
+                    k_kept[s as usize] += 1;
+                }
+            }
+            prio_cands.sort_by(|&a, &b| {
+                let min_a = cover[a].iter().map(|&s| k_kept[s as usize]).min().unwrap_or(usize::MAX);
+                let min_b = cover[b].iter().map(|&s| k_kept[s as usize]).min().unwrap_or(usize::MAX);
+                min_a
+                    .cmp(&min_b)
+                    .then_with(|| cover[b].len().cmp(&cover[a].len()))
+                    .then_with(|| (prefer_tv && variants[b].is_tv).cmp(&(prefer_tv && variants[a].is_tv)))
+                    .then_with(|| a.cmp(&b))
+            });
+        }
+    }
+    if prefer_tv {
+        nonprio_cands.sort_by_key(|&k| !variants[k].is_tv);
+    }
+    ordered.extend(prio_cands);
+    ordered.extend(nonprio_cands);
+
+    // Maintain per-chromosome sorted kept lists + a flag for whether an entry is newly added
+    // (we only need to check against newly added entries within ±(window - 1) because all
+    // candidates already passed the check against every original kept SNP within ±(window - 1),
+    // and insertions only increase distances to original kept SNPs).
+    let mut kept_by_chr: [Vec<(usize, bool)>; 23] = std::array::from_fn(|_| Vec::new());
+    for &k in kept {
+        kept_by_chr[variants[k].chrom as usize].push((k, false));
+    }
+
+    let reach = window - 1;
+    let mut n_added = 0usize;
+    let mut n_added_prio = 0usize;
+
+    for cand in ordered {
+        let chr = variants[cand].chrom as usize;
+        let kchr = &mut kept_by_chr[chr];
+        let pos = kchr.binary_search_by_key(&cand, |&(k, _)| k).unwrap_err();
+        let lo = pos.saturating_sub(reach);
+        let hi = (pos + reach).min(kchr.len());
+        let mut conflict = false;
+        if !ld.is_constant[cand] {
+            for &(other, is_new) in &kchr[lo..hi] {
+                if is_new && ld.pair_r2_ge(cand, other, r2_thresh) {
+                    conflict = true;
+                    break;
+                }
+            }
+        }
+        if !conflict {
+            kchr.insert(pos, (cand, true));
+            n_added += 1;
+            if priority.in_pool(cand) {
+                n_added_prio += 1;
+            }
+        }
+    }
+
+    if n_added == 0 {
+        return (kept.to_vec(), 0, 0);
+    }
+
+    let mut final_kept: Vec<usize> = kept_by_chr
+        .into_iter()
+        .flatten()
+        .map(|(k, _)| k)
+        .collect();
+    final_kept.sort_unstable();
+    (final_kept, n_added, n_added_prio)
+}

@@ -21,6 +21,7 @@ pub struct ReportData {
     pub prio_final: usize,
     pub greedy: usize,
     pub passes: Vec<(usize, usize, usize, usize)>, // (pass_idx, pairs, removed, keep)
+    pub backfill: Option<(usize, usize, usize)>,   // (added_total, added_prio, keep_after)
     pub final_n: usize,
     pub converged: bool,
     pub samples: Vec<(String, usize, usize)>, // (label, avail, kept)
@@ -270,6 +271,17 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
             format!("Cleanup pass {}", i),
             keep,
             format!("{} residual pairs, removed {}", fmt_int(pairs), fmt_int(removed)),
+        ));
+    }
+    if let Some((added, added_prio, keep_after)) = r.backfill {
+        steps.push((
+            "Backfill recovery".to_string(),
+            keep_after,
+            format!(
+                "recovered {} SNPs ({} priority) with no kept LD partner",
+                fmt_int(added),
+                fmt_int(added_prio)
+            ),
         ));
     }
     steps.push(("Final panel".to_string(), r.final_n, String::new()));
