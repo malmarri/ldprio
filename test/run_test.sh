@@ -5,7 +5,7 @@
 #                numbers of SNPs, so per-sample gains are also reported
 #                relative to panel size)
 #
-# Compares ldprio (both --weighting modes) against plain
+# Compares ldprio (all --weighting modes) against plain
 # `plink --indep-pairwise` (LD estimated on the same modern samples) and
 # checks, per panel and mode:
 #   1. ldprio's output is LD-independent (plink finds nothing left to prune)
@@ -93,7 +93,7 @@ test_panel() {
 }
 
 for panel in test_panel chain_panel; do
-    for weighting in inverse fair; do
+    for weighting in adaptive inverse fair; do
         test_panel "$panel" "$weighting"
     done
 done

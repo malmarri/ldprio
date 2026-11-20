@@ -39,12 +39,12 @@ for mode in uniform varying; do
            --allow-no-sex --out "$d/baseline_miss" >/dev/null 2>&1
 
     echo "=== $mode coverage ==="
-    printf "%-5s %7s %14s %14s %14s\n" K pool% plink inverse fair
-    printf "%-5s %7s %14s %14s %14s\n" "" "" "mean fewest" "mean fewest" "mean fewest"
+    printf "%-5s %7s %14s %14s %14s %14s\n" K pool% plink adaptive inverse fair
+    printf "%-5s %7s %14s %14s %14s %14s\n" "" "" "mean fewest" "mean fewest" "mean fewest" "mean fewest"
     for K in 1 5 10 20 50 100; do
         read -r bmean bmin <<< "$(summarise "$d/full.imiss" "$d/baseline_miss.imiss" "$d/priority_K${K}.txt")"
         cols=()
-        for weighting in inverse fair; do
+        for weighting in adaptive inverse fair; do
             o=$d/K${K}.$weighting
             "$LDPRIO" \
                 --bfile "$d/ksweep" \
@@ -56,9 +56,9 @@ for mode in uniform varying; do
             read -r lmean lmin <<< "$(summarise "$d/full.imiss" "$o.miss.imiss" "$d/priority_K${K}.txt")"
             cols+=("$lmean $lmin")
         done
-        pool=$(grep -oE '\([0-9.]+% of panel' "$d/K${K}.inverse.run.log" | grep -oE '[0-9.]+%')
-        printf "%-5s %7s %14s %14s %14s\n" "$K" "$pool" "$bmean $bmin" \
-               "${cols[0]}" "${cols[1]}"
+        pool=$(grep -oE '\([0-9.]+% of panel' "$d/K${K}.adaptive.run.log" | grep -oE '[0-9.]+%')
+        printf "%-5s %7s %14s %14s %14s %14s\n" "$K" "$pool" "$bmean $bmin" \
+               "${cols[0]}" "${cols[1]}" "${cols[2]}"
     done
     echo
 done
