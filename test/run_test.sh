@@ -18,8 +18,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PLINK=${PLINK:-plink}
+LDPRIO=${LDPRIO:-../target/release/ldprio}
 WINDOW=200 STEP=25 R2=0.4
 command -v "$PLINK" >/dev/null || { echo "FAIL: plink not on PATH"; exit 1; }
+[ -x "$LDPRIO" ] || { echo "FAIL: $LDPRIO not found (run cargo build --release)"; exit 1; }
 
 rm -rf out && mkdir -p out
 awk '{print "MODERN\t"$1}' ld_samples.txt > out/ld.keep
@@ -38,12 +40,12 @@ test_panel() {
     $PLINK --bfile "$panel" --extract "$o.baseline.prune.in" \
            --make-bed --allow-no-sex --out "$o.baseline_panel" >/dev/null 2>&1
 
-    python3 ../ldprio.py \
+    "$LDPRIO" \
         --bfile "$panel" \
         --priority-samples priority_samples.txt \
         --ld-samples ld_samples.txt \
         --window $WINDOW --r2 $R2 --weighting "$weighting" \
-        --make-bed --out "$o.ldprio" --plink "$PLINK"
+        --make-bed --out "$o.ldprio"
 
     $PLINK --bfile "$o.ldprio" --keep out/ld.keep \
            --indep-pairwise $WINDOW $STEP $R2 \

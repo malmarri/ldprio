@@ -13,7 +13,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PLINK=${PLINK:-plink}
+LDPRIO=${LDPRIO:-../target/release/ldprio}
 command -v "$PLINK" >/dev/null || { echo "FAIL: plink not on PATH"; exit 1; }
+[ -x "$LDPRIO" ] || { echo "FAIL: $LDPRIO not found (run cargo build --release)"; exit 1; }
 
 # summarise <full.imiss> <pruned.imiss> <priority list> -> "mean% fewest"
 summarise() {
@@ -44,11 +46,11 @@ for mode in uniform varying; do
         cols=()
         for weighting in inverse fair; do
             o=$d/K${K}.$weighting
-            python3 ../ldprio.py \
+            "$LDPRIO" \
                 --bfile "$d/ksweep" \
                 --priority-samples "$d/priority_K${K}.txt" \
                 --ld-samples "$d/ld_samples.txt" --weighting "$weighting" \
-                --out "$o" --plink "$PLINK" > "$o.run.log" 2>&1
+                --out "$o" > "$o.run.log" 2>&1
             $PLINK --bfile "$d/ksweep" --extract "$o.snplist" --missing \
                    --allow-no-sex --out "$o.miss" >/dev/null 2>&1
             read -r lmean lmin <<< "$(summarise "$d/full.imiss" "$o.miss.imiss" "$d/priority_K${K}.txt")"
