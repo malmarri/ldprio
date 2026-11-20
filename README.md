@@ -26,15 +26,15 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 
 ```bash
 ./ldprio \
-    --bfile panel_qc \
+    --bfile dataset \
     --priority-samples priority_samples.txt \
     --ld-samples ld_samples.txt \
     --maf 0.01 \
     --make-bed --report \
-    --out panel_pruned
+    --out dataset_pruned
 ```
 
-- Writes `panel_pruned.snplist`, plus `.bed/.bim/.fam` (`--make-bed`) and a self-contained HTML summary (`--report`).
+- Writes `dataset_pruned.snplist`, plus `.bed/.bim/.fam` (`--make-bed`) and a self-contained HTML summary (`--report`).
 - Sample lists: one sample per line (`IID` or `FID<TAB>IID`).
 - Only autosomes (chromosomes 1–22) are pruned and written out.
 
