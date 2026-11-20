@@ -197,20 +197,28 @@ pub fn greedy_select(
                 (w_u / (w_u + nb_w), deg)
             };
 
-            let mut heap = BinaryHeap::new();
-            for u in 0..m {
-                if !cover[surviving[u]].is_empty() {
-                    let (ratio, deg) = eval(u, &k_kept, &blocked);
-                    heap.push(AdaptiveItem {
-                        q_ratio: quantize_weight(ratio),
-                        is_tv: prefer_tv && variants[surviving[u]].is_tv,
-                        prio_deg: deg,
-                        idx: u,
-                        ratio,
-                        ver: 0,
-                    });
-                }
+            let mut alive_prio: Vec<usize> = (0..m)
+                .filter(|&u| !cover[surviving[u]].is_empty())
+                .collect();
+
+            let mut heap = BinaryHeap::with_capacity(alive_prio.len());
+            for &u in &alive_prio {
+                let (ratio, deg) = eval(u, &k_kept, &blocked);
+                heap.push(AdaptiveItem {
+                    q_ratio: quantize_weight(ratio),
+                    is_tv: prefer_tv && variants[surviving[u]].is_tv,
+                    prio_deg: deg,
+                    idx: u,
+                    ratio,
+                    ver: 0,
+                });
             }
+
+            // Periodically rebuild the heap on a geometric schedule of priority picks
+            // so SNPs whose GWMIN2 ratio increased after competing samples lost weight
+            // don't stay buried in the heap, while keeping total rebuilds O(log M).
+            let mut prio_picked = 0usize;
+            let mut next_rebuild = (n_prio / 4).max(1);
 
             while let Some(top) = heap.pop() {
                 let u = top.idx;
@@ -233,6 +241,7 @@ pub fn greedy_select(
                 }
 
                 kept[u] = true;
+                prio_picked += 1;
                 let mut newly_blocked = Vec::new();
                 for &nb in &adj[u] {
                     if !blocked[nb] {
@@ -243,20 +252,40 @@ pub fn greedy_select(
                 for &s in &cover[surviving[u]] {
                     k_kept[s as usize] += 1;
                 }
-                // Blocking `nb` can increase the GWMIN2 ratio of `nb`'s unblocked priority neighbors
-                for &nb in &newly_blocked {
-                    for &w in &adj[nb] {
-                        if !blocked[w] && !kept[w] && !cover[surviving[w]].is_empty() {
-                            version[w] += 1;
-                            let (ratio, deg) = eval(w, &k_kept, &blocked);
-                            heap.push(AdaptiveItem {
-                                q_ratio: quantize_weight(ratio),
-                                is_tv: prefer_tv && variants[surviving[w]].is_tv,
-                                prio_deg: deg,
-                                idx: w,
-                                ratio,
-                                ver: version[w],
-                            });
+
+                if prio_picked >= next_rebuild {
+                    // Geometric schedule (~1.25x growth) -> ~25-40 rebuilds even on 1240k panels
+                    next_rebuild = prio_picked + (prio_picked / 4).max(1);
+                    alive_prio.retain(|&v| !blocked[v] && !kept[v]);
+                    heap.clear();
+                    for &v in &alive_prio {
+                        version[v] += 1;
+                        let (ratio, deg) = eval(v, &k_kept, &blocked);
+                        heap.push(AdaptiveItem {
+                            q_ratio: quantize_weight(ratio),
+                            is_tv: prefer_tv && variants[surviving[v]].is_tv,
+                            prio_deg: deg,
+                            idx: v,
+                            ratio,
+                            ver: version[v],
+                        });
+                    }
+                } else {
+                    // Blocking `nb` can increase the GWMIN2 ratio of `nb`'s unblocked priority neighbors
+                    for &nb in &newly_blocked {
+                        for &w in &adj[nb] {
+                            if !blocked[w] && !kept[w] && !cover[surviving[w]].is_empty() {
+                                version[w] += 1;
+                                let (ratio, deg) = eval(w, &k_kept, &blocked);
+                                heap.push(AdaptiveItem {
+                                    q_ratio: quantize_weight(ratio),
+                                    is_tv: prefer_tv && variants[surviving[w]].is_tv,
+                                    prio_deg: deg,
+                                    idx: w,
+                                    ratio,
+                                    ver: version[w],
+                                });
+                            }
                         }
                     }
                 }
