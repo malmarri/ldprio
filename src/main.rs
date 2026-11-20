@@ -22,6 +22,7 @@ const MIN_LD_SAMPLES: usize = 30;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum WeightingArg {
+    Adaptive,
     Inverse,
     Fair,
 }
@@ -29,6 +30,7 @@ enum WeightingArg {
 impl From<WeightingArg> for Weighting {
     fn from(w: WeightingArg) -> Self {
         match w {
+            WeightingArg::Adaptive => Weighting::Adaptive,
             WeightingArg::Inverse => Weighting::Inverse,
             WeightingArg::Fair => Weighting::Fair,
         }
@@ -72,7 +74,7 @@ struct Args {
     r2: f64,
 
     /// How blocks contested between nominated samples are settled
-    #[arg(long, value_enum, default_value_t = WeightingArg::Inverse)]
+    #[arg(long, value_enum, default_value_t = WeightingArg::Adaptive)]
     weighting: WeightingArg,
 
     /// Among otherwise equal SNPs, keep transversions over transitions (C<->T, G<->A)

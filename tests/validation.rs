@@ -608,7 +608,8 @@ fn test_large_scale_100k_snps_stability_and_thread_determinism() {
     let prio_list = dir.join("prio.txt");
     fs::write(&prio_list, (0..n_prio).map(|i| format!("A{}\n", i)).collect::<String>()).unwrap();
 
-    // Run with --threads 1 and with default (all cores), verify bit-for-bit identical output!
+    // Run with --threads 1 and with default (all cores) using default --weighting adaptive,
+    // verify bit-for-bit identical output!
     let out_t1 = dir.join("out_t1");
     let res_t1 = Command::new(ldprio_bin())
         .args([
@@ -616,7 +617,7 @@ fn test_large_scale_100k_snps_stability_and_thread_determinism() {
             "--priority-samples", prio_list.to_str().unwrap(),
             "--ld-samples", ld_list.to_str().unwrap(),
             "--window", "200", "--r2", "0.4",
-            "--weighting", "inverse",
+            "--weighting", "adaptive",
             "--threads", "1",
             "--out", out_t1.to_str().unwrap(),
         ])
@@ -632,7 +633,7 @@ fn test_large_scale_100k_snps_stability_and_thread_determinism() {
             "--priority-samples", prio_list.to_str().unwrap(),
             "--ld-samples", ld_list.to_str().unwrap(),
             "--window", "200", "--r2", "0.4",
-            "--weighting", "inverse",
+            "--weighting", "adaptive",
             "--make-bed", "--report",
             "--out", out_mt.to_str().unwrap(),
         ])

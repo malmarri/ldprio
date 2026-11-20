@@ -127,21 +127,25 @@ Nominate only the samples that actually need the help.
 When several nominated samples cover different SNPs in the same LD block,
 only one SNP survives, so someone loses. `--weighting` decides who:
 
-- **`inverse`** (default) — each SNP scores the sum of 1/(total called SNPs)
-  over the nominated samples covering it, and higher scores win. A sample
-  with 10 calls contributes 0.1 to each of its sites, one with 1,000 calls
-  contributes 0.001, so the sparsest samples win. This maximises the
-  average share of each sample's own data that survives. Weak spot: when
-  coverage is nearly equal, small differences still rank the samples strictly,
-  so the slightly better-covered one loses most contests.
+- **`adaptive`** (default) — combines coverage-normalized dynamic proportional
+  fairness ($w_i = \frac{1}{c_i (k_i + 1)}$, where $c_i$ is sample $i$'s total
+  called SNPs and $k_i$ is how many SNPs it has kept so far) with LD-graph
+  awareness (GWMIN2 ratio $\frac{w(u)}{w(u) + \sum_{v \in N(u)} w(v)}$). This
+  protects ultra-sparse samples when coverage varies, splits contested blocks
+  fairly when coverage is similar, and avoids "hub" SNPs that would block
+  multiple other priority sites on decaying-LD chromosomes.
+- **`inverse`** — static weighting: each SNP scores the sum of $1/c_i$ over
+  the nominated samples covering it, and higher scores win. Simple and
+  favours the sparsest samples, though similar-coverage samples can experience
+  winner-take-all behaviour.
 - **`fair`** — samples take turns: the one with the fewest SNPs kept so far
   (sparsest first on ties) keeps its next available site, preferring sites
-  shared with more nominated samples. This evens out the absolute number of
-  SNPs kept per sample, at a small cost in average retention.
+  shared with more nominated samples. Evens out the absolute number of SNPs
+  kept per sample.
 
-Use `inverse` when coverage varies a lot between the samples you nominate
-(the usual ancient-DNA case) and `fair` when they have similar coverage.
-With one nominated sample the two are identical.
+For most cohorts, the default `adaptive` works best across both uniform and
+varying coverage. With one nominated sample, all three modes behave similarly
+(with `adaptive` additionally avoiding high-degree LD hub SNPs on decaying LD).
 
 ### Preferring transversions
 
@@ -180,7 +184,7 @@ but rare or absent in the modern LD-estimation sample are exactly the case.
 | `--window` | 200 | window, in variants |
 | `--step` | 25 | unused (kept for CLI compatibility) |
 | `--r2` | 0.4 | r² threshold |
-| `--weighting` | `inverse` | how blocks contested between nominated samples are settled: `inverse` or `fair` |
+| `--weighting` | `adaptive` | how blocks contested between nominated samples are settled: `adaptive`, `inverse`, or `fair` |
 | `--prefer-transversions` | off | among otherwise equal SNPs, keep transversions over transitions |
 | `--report` | off | also write a self-contained HTML report (`<out>.report.html`) |
 | `--make-bed` | off | also write the pruned PLINK fileset (`<out>.{bed,bim,fam}`) |
