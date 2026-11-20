@@ -29,7 +29,7 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
     --bfile panel_qc \
     --priority-samples priority_samples.txt \
     --ld-samples ld_samples.txt \
-    --maf 0.01 --geno 0.05 --excess-het auto \
+    --maf 0.01 \
     --make-bed --report \
     --out panel_pruned
 ```
