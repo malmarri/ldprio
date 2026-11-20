@@ -13,7 +13,7 @@ use std::time::Instant;
 use clap::{Parser, ValueEnum};
 
 use crate::ld::build_ld_graph;
-use crate::plink::{preview_list, resolve_samples, scan_bed, write_bed_subset, Bim, Fam};
+use crate::plink::{preview_list, resolve_samples, scan_bed, write_bed_subset, Bim, Fam, QcFilters};
 use crate::report::{fmt_int, write_report, ReportData};
 use crate::select::{greedy_select, PriorityPool, Weighting};
 
@@ -73,6 +73,18 @@ struct Args {
     #[arg(long, default_value_t = 0.4)]
     r2: f64,
 
+    /// Minimum minor allele frequency in --ld-samples (e.g. 0.01)
+    #[arg(long)]
+    maf: Option<f64>,
+
+    /// Maximum missing genotype rate in --ld-samples (e.g. 0.05)
+    #[arg(long)]
+    geno: Option<f64>,
+
+    /// Minimum Hardy-Weinberg equilibrium exact p-value in --ld-samples (e.g. 1e-6)
+    #[arg(long)]
+    hwe: Option<f64>,
+
     /// How blocks contested between nominated samples are settled
     #[arg(long, value_enum, default_value_t = WeightingArg::Adaptive)]
     weighting: WeightingArg,
@@ -117,6 +129,21 @@ fn main() {
 fn run(args: Args, start: Instant) -> Result<(), String> {
     if !(args.r2 > 0.0 && args.r2 <= 1.0) {
         return Err(format!("ERROR: --r2 must be in (0, 1], got {}", args.r2));
+    }
+    if let Some(maf) = args.maf {
+        if !(0.0..=0.5).contains(&maf) {
+            return Err(format!("ERROR: --maf must be in [0, 0.5], got {}", maf));
+        }
+    }
+    if let Some(geno) = args.geno {
+        if !(0.0..=1.0).contains(&geno) {
+            return Err(format!("ERROR: --geno must be in [0, 1], got {}", geno));
+        }
+    }
+    if let Some(hwe) = args.hwe {
+        if !(hwe > 0.0 && hwe <= 1.0) {
+            return Err(format!("ERROR: --hwe must be in (0, 1], got {}", hwe));
+        }
     }
     if args.window == 0 {
         return Err(format!(
@@ -166,29 +193,63 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     // ---- 1. Read .fam & .bim ------------------------------------------------
     let fam = Fam::read(Path::new(&format!("{}.fam", args.bfile)))?;
     let bim = Bim::read(Path::new(&format!("{}.bim", args.bfile)))?;
-    let n_snps = bim.variants.len();
+    let n_auto = bim.variants.len();
     let n_fam = fam.samples.len();
 
     eprintln!("ldprio {}", version);
     eprintln!(
         "[1/5] input: {} autosomal SNPs ({} non-autosomal dropped), {} samples",
-        fmt_int(n_snps),
-        fmt_int(bim.n_input - n_snps),
+        fmt_int(n_auto),
+        fmt_int(bim.n_input - n_auto),
         fmt_int(n_fam)
     );
 
-    // ---- 2. Resolve samples & stream .bed -----------------------------------
+    // ---- 2. Resolve samples & stream .bed (with optional LD-sample QC) ------
     let prio_indices = resolve_samples(&args.priority_samples, &fam, "--priority-samples")?;
     let ld_indices = resolve_samples(&args.ld_samples, &fam, "--ld-samples")?;
 
-    let (prio_calls, ld_matrix) = scan_bed(
+    let qc = QcFilters {
+        max_geno: args.geno,
+        min_maf: args.maf,
+        min_hwe: args.hwe,
+    };
+    let (variants, prio_calls, ld_matrix, qc_stats) = scan_bed(
         Path::new(&format!("{}.bed", args.bfile)),
         n_fam,
         bim.n_input,
         &bim.variants,
         &prio_indices,
         &ld_indices,
+        qc,
     )?;
+    let n_snps = variants.len();
+
+    let qc_summary = if qc.is_active() {
+        let mut parts = Vec::new();
+        if let Some(g) = args.geno {
+            parts.push(format!("--geno {} [{}]", g, fmt_int(qc_stats.dropped_geno)));
+        }
+        if let Some(m) = args.maf {
+            parts.push(format!("--maf {} [{}]", m, fmt_int(qc_stats.dropped_maf)));
+        }
+        if let Some(h) = args.hwe {
+            parts.push(format!("--hwe {:e} [{}]", h, fmt_int(qc_stats.dropped_hwe)));
+        }
+        let summary = parts.join(", ");
+        eprintln!(
+            "      LD-sample QC: {} SNPs passed ({} dropped: {})",
+            fmt_int(n_snps),
+            fmt_int(qc_stats.total_dropped()),
+            summary
+        );
+        Some(summary)
+    } else {
+        None
+    };
+
+    if n_snps == 0 {
+        return Err("ERROR: no autosomal SNPs remain after LD-sample QC filters".to_string());
+    }
 
     // Disambiguate priority sample labels if duplicate IIDs exist across families
     let mut prio_iid_counts: HashMap<&str, usize> = HashMap::new();
@@ -299,7 +360,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
 
     // ---- 4. Initial LD graph + priority-first greedy selection --------------
     let n_tv_input = if args.prefer_transversions {
-        bim.variants.iter().filter(|v| v.is_tv).count()
+        variants.iter().filter(|v| v.is_tv).count()
     } else {
         0
     };
@@ -312,8 +373,8 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     let prefer_tv = args.prefer_transversions && n_tv_input > 0;
 
     let all_auto: Vec<usize> = (0..n_snps).collect();
-    let (adj, n_pairs) = build_ld_graph(&ld_matrix, &all_auto, &bim.variants, args.window, args.r2);
-    let mut current = greedy_select(&all_auto, &adj, &priority, &bim.variants, prefer_tv);
+    let (adj, n_pairs) = build_ld_graph(&ld_matrix, &all_auto, &variants, args.window, args.r2);
+    let mut current = greedy_select(&all_auto, &adj, &priority, &variants, prefer_tv);
     let n_greedy = current.len();
     let n_prio_after_greedy = current.iter().filter(|&&k| priority.in_pool(k)).count();
 
@@ -332,11 +393,11 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     let mut passes: Vec<(usize, usize, usize, usize)> = Vec::new();
     for pass in 1..=args.max_cleanup {
         let (adj_i, n_pairs_i) =
-            build_ld_graph(&ld_matrix, &current, &bim.variants, args.window, args.r2);
+            build_ld_graph(&ld_matrix, &current, &variants, args.window, args.r2);
         let (next, n_removed) = if n_pairs_i == 0 {
             (current, 0)
         } else {
-            let kept_i = greedy_select(&current, &adj_i, &priority, &bim.variants, prefer_tv);
+            let kept_i = greedy_select(&current, &adj_i, &priority, &variants, prefer_tv);
             let rem = current.len() - kept_i.len();
             (kept_i, rem)
         };
@@ -373,7 +434,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
             .map_err(|e| format!("ERROR: failed to create {}: {}", snplist_path, e))?;
         let mut w = BufWriter::new(f);
         for &k in &current {
-            writeln!(w, "{}", bim.variants[k].id)
+            writeln!(w, "{}", variants[k].id)
                 .map_err(|e| format!("ERROR: writing {}: {}", snplist_path, e))?;
         }
     }
@@ -392,7 +453,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
         100.0 * (n_prio_final as f64) / (pool_size as f64)
     );
     let n_tv_final = if prefer_tv {
-        let n_tv = current.iter().filter(|&&k| bim.variants[k].is_tv).count();
+        let n_tv = current.iter().filter(|&&k| variants[k].is_tv).count();
         eprintln!(
             "      transversions: {}/{} kept SNPs ({:.1}%)",
             fmt_int(n_tv),
@@ -406,7 +467,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     eprintln!("      wrote {}", snplist_path);
 
     if args.make_bed {
-        write_bed_subset(&args.bfile, &args.out, n_fam, &bim.variants, &current)?;
+        write_bed_subset(&args.bfile, &args.out, n_fam, &variants, &current)?;
         eprintln!("      wrote {}.{{bed,bim,fam}}", args.out);
     }
 
@@ -431,7 +492,10 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
                 r2: args.r2,
                 window: args.window,
                 n_input: bim.n_input,
+                n_auto,
                 n_snps,
+                qc_dropped: qc_stats.total_dropped(),
+                qc_summary,
                 n_fam,
                 n_ld: ld_indices.len(),
                 pool: pool_size,

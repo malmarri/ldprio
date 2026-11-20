@@ -238,6 +238,94 @@ impl Bim {
     }
 }
 
+/// Exact Hardy-Weinberg equilibrium p-value (Wigginton, Cutler & Abecasis 2005, AJHG),
+/// matching PLINK 1.9's exact HWE test.
+pub fn hwe_exact_p(obs_hets: usize, obs_hom1: usize, obs_hom2: usize) -> f64 {
+    let obs_homr = obs_hom1.min(obs_hom2);
+    let obs_homc = obs_hom1.max(obs_hom2);
+    let rare_copies = 2 * obs_homr + obs_hets;
+    let genotypes = obs_hets + obs_homc + obs_homr;
+    if genotypes == 0 || rare_copies == 0 {
+        return 1.0;
+    }
+
+    let mut het_probs = vec![0.0f64; rare_copies + 1];
+    // Anchor at the midpoint of the distribution to avoid floating-point underflow
+    let mut mid = ((rare_copies as u64) * (2 * (genotypes as u64) - (rare_copies as u64))
+        / (2 * (genotypes as u64))) as usize;
+    if (rare_copies & 1) != (mid & 1) {
+        mid += 1;
+    }
+    if mid > rare_copies {
+        mid -= 2;
+    }
+
+    het_probs[mid] = 1.0;
+    let mut sum = 1.0f64;
+
+    // Recurse downward from mid
+    let mut curr_hets = mid;
+    let mut curr_homr = (rare_copies - mid) / 2;
+    let mut curr_homc = genotypes - curr_hets - curr_homr;
+    while curr_hets >= 2 {
+        let next = het_probs[curr_hets] * (curr_hets as f64) * ((curr_hets - 1) as f64)
+            / (4.0 * ((curr_homr + 1) as f64) * ((curr_homc + 1) as f64));
+        het_probs[curr_hets - 2] = next;
+        sum += next;
+        curr_hets -= 2;
+        curr_homr += 1;
+        curr_homc += 1;
+    }
+
+    // Recurse upward from mid
+    curr_hets = mid;
+    curr_homr = (rare_copies - mid) / 2;
+    curr_homc = genotypes - curr_hets - curr_homr;
+    while curr_hets + 2 <= rare_copies {
+        let next = het_probs[curr_hets] * 4.0 * (curr_homr as f64) * (curr_homc as f64)
+            / (((curr_hets + 2) as f64) * ((curr_hets + 1) as f64));
+        het_probs[curr_hets + 2] = next;
+        sum += next;
+        curr_hets += 2;
+        curr_homr -= 1;
+        curr_homc -= 1;
+    }
+
+    let target = het_probs[obs_hets];
+    let tol = target * 1e-12;
+    let p_sum: f64 = het_probs
+        .iter()
+        .filter(|&&p| p <= target + tol)
+        .sum();
+    (p_sum / sum).min(1.0)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QcFilters {
+    pub max_geno: Option<f64>,
+    pub min_maf: Option<f64>,
+    pub min_hwe: Option<f64>,
+}
+
+impl QcFilters {
+    pub fn is_active(&self) -> bool {
+        self.max_geno.is_some() || self.min_maf.is_some() || self.min_hwe.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QcStats {
+    pub dropped_geno: usize,
+    pub dropped_maf: usize,
+    pub dropped_hwe: usize,
+}
+
+impl QcStats {
+    pub fn total_dropped(&self) -> usize {
+        self.dropped_geno + self.dropped_maf + self.dropped_hwe
+    }
+}
+
 /// Compact bitset of priority sample calls per autosomal SNP.
 pub struct PriorityCalls {
     pub n_prio: usize,
@@ -266,7 +354,8 @@ impl PriorityCalls {
 }
 
 /// Single-pass streaming reader over `.bed`:
-/// extracts priority-sample call bitsets and LD-sample 2-bit genotype bitvectors.
+/// applies optional LD-sample QC filters (`--geno`, `--maf`, `--hwe`) and extracts
+/// priority-sample call bitsets and LD-sample 2-bit genotype bitvectors for passing SNPs.
 pub fn scan_bed(
     bed_path: &Path,
     n_fam: usize,
@@ -274,7 +363,8 @@ pub fn scan_bed(
     variants: &[Variant],
     prio_indices: &[usize],
     ld_indices: &[usize],
-) -> Result<(PriorityCalls, LdMatrix), String> {
+    qc: QcFilters,
+) -> Result<(Vec<Variant>, PriorityCalls, LdMatrix, QcStats), String> {
     let mut file = File::open(bed_path)
         .map_err(|e| format!("ERROR: failed to open {}: {}", bed_path.display(), e))?;
     let meta = file
@@ -306,11 +396,11 @@ pub fn scan_bed(
 
     let mut reader = BufReader::with_capacity(1 << 20, file);
 
-    let n_snps = variants.len();
+    let n_snps_in = variants.len();
     let n_prio = prio_indices.len();
     let prio_words = (n_prio + 63) / 64;
     let mut prio_coverage = vec![0usize; n_prio];
-    let mut prio_bits = vec![0u64; n_snps * prio_words];
+    let mut prio_bits: Vec<u64> = Vec::with_capacity(n_snps_in * prio_words);
 
     // Precompute (byte_idx, shift, word_idx, bit_mask) for priority and LD samples
     let prio_loc: Vec<(usize, u8, usize, u64)> = prio_indices
@@ -321,10 +411,12 @@ pub fn scan_bed(
 
     let n_ld = ld_indices.len();
     let ld_words = (n_ld + 63) / 64;
-    let mut ld_valid = vec![0u64; n_snps * ld_words];
-    let mut ld_het = vec![0u64; n_snps * ld_words];
-    let mut ld_hom2 = vec![0u64; n_snps * ld_words];
-    let mut is_constant = vec![false; n_snps];
+    let mut ld_valid: Vec<u64> = Vec::with_capacity(n_snps_in * ld_words);
+    let mut ld_het: Vec<u64> = Vec::with_capacity(n_snps_in * ld_words);
+    let mut ld_hom2: Vec<u64> = Vec::with_capacity(n_snps_in * ld_words);
+    let mut is_constant: Vec<bool> = Vec::with_capacity(n_snps_in);
+    let mut kept_variants: Vec<Variant> = Vec::with_capacity(n_snps_in);
+    let mut qc_stats = QcStats::default();
 
     let ld_loc: Vec<(usize, u8, usize, u64)> = ld_indices
         .iter()
@@ -334,8 +426,12 @@ pub fn scan_bed(
 
     let mut row = vec![0u8; bytes_per_snp];
     let mut cur_orig = 0usize;
+    let mut row_valid = vec![0u64; ld_words];
+    let mut row_het = vec![0u64; ld_words];
+    let mut row_hom2 = vec![0u64; ld_words];
+    let mut row_prio = vec![0u64; prio_words];
 
-    for (k, var) in variants.iter().enumerate() {
+    for var in variants {
         while cur_orig < var.orig_idx {
             reader
                 .read_exact(&mut row)
@@ -347,52 +443,84 @@ pub fn scan_bed(
             .map_err(|e| format!("ERROR: reading {}: {}", bed_path.display(), e))?;
         cur_orig += 1;
 
-        // Priority calls
-        let p_base = k * prio_words;
-        for (i, &(bidx, shift, w, mask)) in prio_loc.iter().enumerate() {
-            let code = (row[bidx] >> shift) & 3;
-            if code != 1 {
-                prio_coverage[i] += 1;
-                prio_bits[p_base + w] |= mask;
-            }
-        }
-
-        // LD genotypes
-        let l_base = k * ld_words;
+        // Decode LD genotypes first so QC filters can reject before touching priority counts
+        row_valid.fill(0);
+        row_het.fill(0);
+        row_hom2.fill(0);
         let mut n_val = 0u64;
         let mut n_het = 0u64;
         let mut n_hom2 = 0u64;
         for &(bidx, shift, w, mask) in &ld_loc {
             match (row[bidx] >> shift) & 3 {
                 0 => {
-                    // hom A1 (dosage 0)
-                    ld_valid[l_base + w] |= mask;
+                    row_valid[w] |= mask;
                     n_val += 1;
                 }
-                1 => {
-                    // missing
-                }
+                1 => {}
                 2 => {
-                    // het (dosage 1)
-                    ld_valid[l_base + w] |= mask;
-                    ld_het[l_base + w] |= mask;
+                    row_valid[w] |= mask;
+                    row_het[w] |= mask;
                     n_val += 1;
                     n_het += 1;
                 }
                 3 => {
-                    // hom A2 (dosage 2)
-                    ld_valid[l_base + w] |= mask;
-                    ld_hom2[l_base + w] |= mask;
+                    row_valid[w] |= mask;
+                    row_hom2[w] |= mask;
                     n_val += 1;
                     n_hom2 += 1;
                 }
                 _ => unreachable!(),
             }
         }
+
+        // Apply LD-sample QC filters (geno -> maf -> hwe, matching PLINK 1.9 order)
+        if let Some(max_geno) = qc.max_geno {
+            let miss_rate = ((n_ld as u64 - n_val) as f64) / (n_ld as f64);
+            if miss_rate > max_geno + 1e-12 {
+                qc_stats.dropped_geno += 1;
+                continue;
+            }
+        }
+        if let Some(min_maf) = qc.min_maf {
+            let maf = if n_val == 0 {
+                0.0
+            } else {
+                let p = ((n_het + 2 * n_hom2) as f64) / (2.0 * (n_val as f64));
+                p.min(1.0 - p)
+            };
+            if maf < min_maf - 1e-12 {
+                qc_stats.dropped_maf += 1;
+                continue;
+            }
+        }
+        if let Some(min_hwe) = qc.min_hwe {
+            let n_hom1 = (n_val - n_het - n_hom2) as usize;
+            let p = hwe_exact_p(n_het as usize, n_hom1, n_hom2 as usize);
+            if p < min_hwe {
+                qc_stats.dropped_hwe += 1;
+                continue;
+            }
+        }
+
+        // Passed QC: record variant, LD bitvectors, and priority calls
+        kept_variants.push(var.clone());
+        ld_valid.extend_from_slice(&row_valid);
+        ld_het.extend_from_slice(&row_het);
+        ld_hom2.extend_from_slice(&row_hom2);
+
         let sum_x = n_het + 2 * n_hom2;
         let sum_x2 = n_het + 4 * n_hom2;
-        let constant = n_val == 0 || n_val * sum_x2 == sum_x * sum_x;
-        is_constant[k] = constant;
+        is_constant.push(n_val == 0 || n_val * sum_x2 == sum_x * sum_x);
+
+        row_prio.fill(0);
+        for (i, &(bidx, shift, w, mask)) in prio_loc.iter().enumerate() {
+            let code = (row[bidx] >> shift) & 3;
+            if code != 1 {
+                prio_coverage[i] += 1;
+                row_prio[w] |= mask;
+            }
+        }
+        prio_bits.extend_from_slice(&row_prio);
     }
 
     let prio_calls = PriorityCalls {
@@ -408,7 +536,7 @@ pub fn scan_bed(
         hom2: ld_hom2,
         is_constant,
     };
-    Ok((prio_calls, ld_matrix))
+    Ok((kept_variants, prio_calls, ld_matrix, qc_stats))
 }
 
 /// Write pruned `.bed`, `.bim`, `.fam` directly by copying raw `.bed` SNP byte slices.

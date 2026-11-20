@@ -11,7 +11,10 @@ pub struct ReportData {
     pub r2: f64,
     pub window: usize,
     pub n_input: usize,
+    pub n_auto: usize,
     pub n_snps: usize,
+    pub qc_dropped: usize,
+    pub qc_summary: Option<String>,
     pub n_fam: usize,
     pub n_ld: usize,
     pub pool: usize,
@@ -252,7 +255,15 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
     };
 
     let mut steps: Vec<(String, usize, String)> = Vec::new();
-    steps.push(("Autosomal SNPs in input".to_string(), r.n_snps, String::new()));
+    let bar_denom = r.n_auto.max(1);
+    steps.push(("Autosomal SNPs in input".to_string(), r.n_auto, String::new()));
+    if let Some(ref qc_desc) = r.qc_summary {
+        steps.push((
+            "After LD-sample QC".to_string(),
+            r.n_snps,
+            format!("{} dropped ({})", fmt_int(r.qc_dropped), esc(qc_desc)),
+        ));
+    }
     steps.push(("After first LD pass".to_string(), r.greedy, String::new()));
     for &(i, pairs, removed, keep) in &r.passes {
         steps.push((
@@ -268,7 +279,7 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
         funnel.push_str(&format!(
             "<div class=\"row wide\"><div class=\"lab\">{}</div><div class=\"track\"><div class=\"fill\" style=\"width:{:.1}%\"></div></div><div class=\"num\">{}</div></div>",
             esc(&lab),
-            100.0 * (v as f64) / (r.n_snps as f64),
+            100.0 * (v as f64) / (bar_denom as f64),
             fmt_int(v)
         ));
         if !extra.is_empty() {
@@ -296,10 +307,16 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
         ),
         (
             "Non-autosomal SNPs dropped",
-            fmt_int(r.n_input.saturating_sub(r.n_snps)),
+            fmt_int(r.n_input.saturating_sub(r.n_auto)),
         ),
         ("Samples in input", fmt_int(r.n_fam)),
     ];
+    if let Some(ref qc_desc) = r.qc_summary {
+        settings.push((
+            "LD-sample QC",
+            format!("{} dropped ({})", fmt_int(r.qc_dropped), esc(qc_desc)),
+        ));
+    }
     if let Some((n_tv, n_fin)) = r.tv_share {
         settings.push(("Transversions in output", pct(n_tv, n_fin)));
     }

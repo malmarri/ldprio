@@ -184,6 +184,9 @@ but rare or absent in the modern LD-estimation sample are exactly the case.
 | `--window` | 200 | window, in variants |
 | `--step` | 25 | unused (kept for CLI compatibility) |
 | `--r2` | 0.4 | r² threshold |
+| `--maf` | off | minimum minor allele frequency in `--ld-samples` (e.g. `0.01`) |
+| `--geno` | off | maximum missing genotype rate in `--ld-samples` (e.g. `0.05`) |
+| `--hwe` | off | minimum Hardy-Weinberg equilibrium exact p-value in `--ld-samples` (e.g. `1e-6`) |
 | `--weighting` | `adaptive` | how blocks contested between nominated samples are settled: `adaptive`, `inverse`, or `fair` |
 | `--prefer-transversions` | off | among otherwise equal SNPs, keep transversions over transitions |
 | `--report` | off | also write a self-contained HTML report (`<out>.report.html`) |
