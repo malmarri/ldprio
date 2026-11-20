@@ -760,7 +760,7 @@ fn test_ld_sample_qc_filters_geno_maf_excess_het() {
             "--ld-samples", ld_list.to_str().unwrap(),
             "--geno", "0.10",
             "--maf", "0.01",
-            "--excess-het", "1e-6",
+            "--excess-het", "auto",
             "--make-bed", "--report",
             "--out", out_prefix.to_str().unwrap(),
         ])

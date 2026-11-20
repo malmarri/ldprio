@@ -238,6 +238,23 @@ impl Bim {
     }
 }
 
+/// Normalized excess heterozygosity (`-F_IS = (H_obs - H_exp) / H_exp`).
+#[inline]
+pub fn het_excess(obs_hets: usize, obs_hom1: usize, obs_hom2: usize) -> f64 {
+    let n = obs_hets + obs_hom1 + obs_hom2;
+    if n == 0 {
+        return 0.0;
+    }
+    let nf = n as f64;
+    let p = (obs_hets + 2 * obs_hom2) as f64 / (2.0 * nf);
+    let h_exp = 2.0 * p * (1.0 - p);
+    if h_exp <= 0.0 {
+        return 0.0;
+    }
+    let h_obs = (obs_hets as f64) / nf;
+    (h_obs - h_exp) / h_exp
+}
+
 /// Exact one-sided excess-heterozygosity p-value: P(H >= obs_hets | HWE),
 /// computed via the Wigginton, Cutler & Abecasis (2005) recurrence (matching
 /// `bcftools` ExcHet and `plink --hwe <p> keep-fewhet`).
@@ -303,6 +320,8 @@ pub struct QcFilters {
     pub max_geno: Option<f64>,
     pub min_maf: Option<f64>,
     pub min_excess_het_p: Option<f64>,
+    /// Optional effect-size floor on `-F_IS = (H_obs - H_exp)/H_exp` (used by `--excess-het auto`).
+    pub min_excess_het_fis: Option<f64>,
 }
 
 impl QcFilters {
@@ -493,8 +512,11 @@ pub fn scan_bed(
         }
         if let Some(min_p) = qc.min_excess_het_p {
             let n_hom1 = (n_val - n_het - n_hom2) as usize;
-            let p = excess_het_p(n_het as usize, n_hom1, n_hom2 as usize);
-            if p < min_p {
+            let passes_fis_floor = match qc.min_excess_het_fis {
+                None => true,
+                Some(min_ex) => het_excess(n_het as usize, n_hom1, n_hom2 as usize) > min_ex,
+            };
+            if passes_fis_floor && excess_het_p(n_het as usize, n_hom1, n_hom2 as usize) < min_p {
                 qc_stats.dropped_excess_het += 1;
                 continue;
             }

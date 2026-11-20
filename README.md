@@ -186,7 +186,7 @@ but rare or absent in the modern LD-estimation sample are exactly the case.
 | `--r2` | 0.4 | r² threshold |
 | `--maf` | off | minimum minor allele frequency in `--ld-samples` (e.g. `0.01`) |
 | `--geno` | off | maximum missing genotype rate in `--ld-samples` (e.g. `0.05`) |
-| `--excess-het` | off | minimum one-sided exact excess-heterozygosity p-value in `--ld-samples` (e.g. `1e-6`, or `auto` for Bonferroni `0.05 / n_snps`; equivalent to `bcftools` ExcHet / `plink --hwe keep-fewhet`, preserving Wahlund homozygote excess) |
+| `--excess-het` | off | one-sided exact excess-heterozygosity p-value in `--ld-samples` (e.g. `1e-6`, matching `bcftools` ExcHet / `plink --hwe keep-fewhet`), or `auto` (`p < 1e-4` for N < 100 else `p < 1e-6`, and `-F_IS > 0.20`, so it works across small and large N while preserving Wahlund homozygote excess) |
 | `--weighting` | `adaptive` | how blocks contested between nominated samples are settled: `adaptive`, `inverse`, or `fair` |
 | `--prefer-transversions` | off | among otherwise equal SNPs, keep transversions over transitions |
 | `--report` | off | also write a self-contained HTML report (`<out>.report.html`) |

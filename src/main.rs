@@ -81,7 +81,7 @@ struct Args {
     #[arg(long)]
     geno: Option<f64>,
 
-    /// Minimum one-sided exact excess-heterozygosity p-value in --ld-samples (e.g. 1e-6, or 'auto' for Bonferroni 0.05/n_snps)
+    /// Minimum one-sided exact excess-heterozygosity p-value in --ld-samples (e.g. 1e-6, or 'auto')
     #[arg(long = "excess-het")]
     excess_het: Option<String>,
 
@@ -222,16 +222,20 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     let prio_indices = resolve_samples(&args.priority_samples, &fam, "--priority-samples")?;
     let ld_indices = resolve_samples(&args.ld_samples, &fam, "--ld-samples")?;
 
-    let min_excess_het_p = match excess_het_mode {
-        None => None,
-        Some(Ok(p)) => Some(p),
-        Some(Err(())) => Some(0.05 / (n_auto as f64)),
+    let (min_excess_het_p, min_excess_het_fis) = match excess_het_mode {
+        None => (None, None),
+        Some(Ok(p)) => (Some(p), None),
+        Some(Err(())) => {
+            let p = if ld_indices.len() < 100 { 1e-4 } else { 1e-6 };
+            (Some(p), Some(0.20))
+        }
     };
 
     let qc = QcFilters {
         max_geno: args.geno,
         min_maf: args.maf,
         min_excess_het_p,
+        min_excess_het_fis,
     };
     let (variants, prio_calls, ld_matrix, qc_stats) = scan_bed(
         Path::new(&format!("{}.bed", args.bfile)),
@@ -253,8 +257,8 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
             parts.push(format!("--maf {} [{}]", m, fmt_int(qc_stats.dropped_maf)));
         }
         if let Some(p) = min_excess_het_p {
-            let tag = if matches!(excess_het_mode, Some(Err(()))) {
-                format!("--excess-het auto ({:.2e})", p)
+            let tag = if let Some(ex) = min_excess_het_fis {
+                format!("--excess-het auto (p<{:e}, -F_IS>{})", p, ex)
             } else {
                 format!("--excess-het {:e}", p)
             };
