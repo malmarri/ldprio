@@ -27,6 +27,26 @@ way. Sparse samples keep substantially more of their real data.
 
 ## Installation
 
+### Pre-compiled binary (recommended)
+
+Download the binary for your platform from the [Releases](https://github.com/malmarri/ldprio/releases/latest) page — no Rust, PLINK, or Python required:
+
+**Linux (x86_64, static — works on any HPC cluster):**
+```bash
+curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-linux-x86_64.tar.gz | tar -xz
+chmod +x ldprio
+```
+
+**macOS (Apple Silicon):**
+```bash
+curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-macos-arm64.tar.gz | tar -xz
+chmod +x ldprio
+```
+
+*(Intel macOS `ldprio-macos-x86_64.tar.gz` and Linux ARM64 `ldprio-linux-aarch64.tar.gz` are also available on the Releases page.)*
+
+### Build from source
+
 Requires the Rust toolchain (`cargo`):
 
 ```bash
