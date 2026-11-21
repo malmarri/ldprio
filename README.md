@@ -55,27 +55,6 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 - **`--window` / `--window-kb`** — LD window as a variant count (default `200`, PLINK-compatible) or as a physical distance in kb from `.bim` positions (e.g. `--window-kb 500`; needs a position-sorted `.bim`). A kb window means the same distance on any array and needs no cleanup passes; compare against `plink --indep-pairwise 500kb 1 0.4`.
 - **`--transv`** — breaks ties in favour of transversions over ancient-DNA-damaged transitions (C↔T, G↔A).
 
-### Choosing priority samples
-
-Nominated samples compete for the same LD blocks, and with the default `--weighting adaptive` the sample with fewer calls tends to win a contested block. Each sample you add therefore reduces the gain of the others, and adding samples **sparser** than the ones you care about costs the most.
-
-Six Natufians (12k–123k calls) were always nominated, and extra low-coverage ancient samples (5k–300k calls) were added either at random or sparsest-first (1240k, 300 modern `.DG` diploids for LD, `--maf 0.01 --geno 0.05`, `adaptive`; gain = SNPs kept relative to PLINK, averaged over the Natufians):
-
-| Extra samples nominated | Natufian gain (random extras) | Natufian gain (sparsest extras) |
-| ---: | ---: | ---: |
-| 0 | 2.31× | 2.31× |
-| 10 | 2.09× | 2.00× |
-| 25 | 1.93× | 1.75× |
-| 50 | 1.81× | 1.53× |
-| 100 | 1.67× | 1.36× |
-| all 1,937 | 1.40× | 1.40× |
-
-- **Nominate the samples your analysis is about**, not every low-coverage sample in the panel.
-- **Adding sparser samples costs the most.** If your focal samples are not the sparsest, every much sparser sample you add takes contested blocks from them.
-- **Large nominations are still safe.** With all 1,943 samples nominated, nominated samples kept 1.31× more of their SNPs than with PLINK on average, and samples never nominated still gained (1.14–1.28× on average across all runs, never below PLINK).
-
-*Random-order results varied by at most ±0.1× across 5 replicate orders.*
-
 ## Options
 
 | Option | Default | Description |
@@ -121,6 +100,27 @@ Evaluated on the full public 1240k dataset from Lazaridis, Alpaslan-Roodenberg e
 | **Mean share** | | **31.3%** | **72.3%** | | |
 
 *\*Adjusted for the 1.08× difference in overall pruned panel size (`372,301` vs. `345,784` SNPs).*
+
+## Choosing priority samples
+
+Nominated samples compete for the same LD blocks, and with the default `--weighting adaptive` the sample with fewer calls tends to win a contested block. Each sample you add therefore reduces the gain of the others, and adding samples **sparser** than the ones you care about costs the most.
+
+To measure this, we reran the [Natufian benchmark](#benchmark-southern-arc-natufians-1240k) above with the same settings, keeping its six Natufians (12k–123k calls) nominated throughout. We then also nominated more low-coverage ancient samples from the same dataset (1,937 samples with 5k–300k calls), adding them either in random order or sparsest first. The table shows the Natufians' gain: the number of their SNPs kept by `ldprio` relative to PLINK, averaged over the six.
+
+| Extra samples nominated | Natufian gain (random extras) | Natufian gain (sparsest extras) |
+| ---: | ---: | ---: |
+| 0 | 2.31× | 2.31× |
+| 10 | 2.09× | 2.00× |
+| 25 | 1.93× | 1.75× |
+| 50 | 1.81× | 1.53× |
+| 100 | 1.67× | 1.36× |
+| all 1,937 | 1.40× | 1.40× |
+
+- **Nominate the samples your analysis is about**, not every low-coverage sample in the panel.
+- **Adding sparser samples costs the most.** If your focal samples are not the sparsest, every much sparser sample you add takes contested blocks from them.
+- **Large nominations are still safe.** With all 1,943 samples nominated, nominated samples kept 1.31× more of their SNPs than with PLINK on average, and samples never nominated still gained (1.14–1.28× on average across all runs, never below PLINK).
+
+*Random-order results varied by at most ±0.1× across 5 replicate orders.*
 
 ## Tests
 
