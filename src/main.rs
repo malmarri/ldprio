@@ -17,7 +17,9 @@ use crate::plink::{preview_list, resolve_samples, scan_bed, write_bed_subset, Bi
 use crate::report::{fmt_int, write_report, ReportData};
 use crate::select::{backfill_select, greedy_select, PriorityPool, Weighting};
 
-const POOL_WARN_FRACTION: f64 = 0.70;
+/// Above this many nominated samples, print a note on how they compete for LD blocks
+/// (real-data sweeps: each added sample, especially a sparser one, reduces the others' gain).
+const PRIO_NOTE_COUNT: usize = 10;
 const MIN_LD_SAMPLES: usize = 30;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -366,12 +368,17 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
         prio_indices.len(),
         weighting.as_str()
     );
-    if pool_frac > POOL_WARN_FRACTION {
+    if prio_indices.len() > PRIO_NOTE_COUNT {
+        let with_calls: Vec<usize> = prio_calls.coverage.iter().copied().filter(|&c| c > 0).collect();
+        let lo = with_calls.iter().copied().min().unwrap_or(0);
+        let hi = with_calls.iter().copied().max().unwrap_or(0);
         emit(
             &mut messages,
             &format!(
-                "      WARNING: priority pool is {:.0}% of the panel. Most blocks are now contested between nominated samples, so each keeps a smaller share of its sites -- consider nominating only the samples that actually need it.",
-                100.0 * pool_frac
+                "      note: {} priority samples nominated (calls: {} to {}). Nominated samples compete for LD blocks, so each keeps a smaller share as more are added; with adaptive or inverse weighting, samples with fewer calls win contested blocks. Nominate only the samples your analysis is about (see \"Choosing priority samples\" in the README).",
+                prio_indices.len(),
+                fmt_int(lo),
+                fmt_int(hi)
             ),
         );
     }

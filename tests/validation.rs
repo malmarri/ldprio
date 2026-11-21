@@ -1104,3 +1104,49 @@ fn test_window_kb_single_pass_independent_and_maximal_and_input_checks() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_priority_count_note_above_ten_samples() {
+    // The "priority samples compete" note appears with more than 10 nominated samples, not with 10.
+    let dir = temp_dir("prio_note");
+    let mut rng = Rng::new(7);
+    let (n_ld, n_prio) = (40usize, 11usize);
+    let n = n_ld + n_prio;
+    let fam_owned: Vec<(String, String)> = (0..n)
+        .map(|i| if i < n_ld { ("LD".to_string(), format!("M{}", i)) } else { ("ANC".to_string(), format!("A{}", i - n_ld)) })
+        .collect();
+    let fam_refs: Vec<(&str, &str)> = fam_owned.iter().map(|(f, i)| (f.as_str(), i.as_str())).collect();
+    let ids: Vec<String> = (0..60).map(|j| format!("s{}", j)).collect();
+    let bim_rows: Vec<(&str, &str, usize, &str, &str)> =
+        ids.iter().enumerate().map(|(j, id)| ("1", id.as_str(), 1000 * (j + 1), "A", "C")).collect();
+    let geno: Vec<Vec<u8>> = (0..60)
+        .map(|_| (0..n).map(|s| if s >= n_ld && rng.next_f64() < 0.5 { 1 } else { [0u8, 2, 3][(rng.next_u64() % 3) as usize] }).collect())
+        .collect();
+    let prefix = dir.join("panel");
+    write_plink_fileset(&prefix, &fam_refs, &bim_rows, &geno);
+    let ld_list = dir.join("ld.txt");
+    fs::write(&ld_list, (0..n_ld).map(|i| format!("M{}\n", i)).collect::<String>()).unwrap();
+
+    for (k, expect_note) in [(10usize, false), (11usize, true)] {
+        let prio_list = dir.join(format!("prio{}.txt", k));
+        fs::write(&prio_list, (0..k).map(|i| format!("A{}\n", i)).collect::<String>()).unwrap();
+        let out = dir.join(format!("out{}", k));
+        let res = Command::new(ldprio_bin())
+            .args([
+                "--bfile", prefix.to_str().unwrap(),
+                "--priority-samples", prio_list.to_str().unwrap(),
+                "--ld-samples", ld_list.to_str().unwrap(),
+                "--report",
+                "--out", out.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&res.stderr);
+        assert!(res.status.success(), "run with {} priority samples failed:\n{}", k, stderr);
+        assert_eq!(stderr.contains("priority samples nominated"), expect_note, "K={}:\n{}", k, stderr);
+        assert!(!stderr.contains("priority pool is"), "old pool warning must be gone");
+        let html = fs::read_to_string(format!("{}.report.html", out.display())).unwrap();
+        assert_eq!(html.contains("Choosing priority samples"), expect_note, "report note K={}", k);
+    }
+    let _ = fs::remove_dir_all(&dir);
+}

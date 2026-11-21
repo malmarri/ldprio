@@ -40,7 +40,7 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 
 ## How it works
 
-1. **Priority pool:** identifies SNPs covered by `--priority-samples`. Nominate only the sparse samples that need help.
+1. **Priority pool:** identifies SNPs covered by `--priority-samples`. Nominate the samples your analysis is about (see [Choosing priority samples](#choosing-priority-samples)).
 2. **LD-sample QC (optional):** filters autosomes by `--geno`, `--maf`, and `--excess-het` on `--ld-samples`.
 3. **LD graph & greedy selection:** computes exact pairwise Pearson r² on `--ld-samples` (use ≥30 high-quality diploids; avoid pseudo-haploids) across the window (`--window` variants, or `--window-kb`), keeps priority-pool SNPs first according to `--weighting`, then fills the rest in genomic order.
 4. **Cleanup:** with `--window` (counted in variants, as in PLINK), pruning widens the physical span of the window, so LD checks are repeated in memory until zero residual pairs above `--r2` remain, and SNPs left without a kept LD partner are recovered. With `--window-kb` the window is a fixed distance, so the first pass is already LD-independent and is simply verified.
@@ -54,6 +54,27 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 - **`--maf` / `--geno` / `--excess-het`** — optional QC calculated on `--ld-samples` before pruning. `--excess-het auto` removes excess-heterozygosity artifacts (`p < 1e-4` for N < 100 else `1e-6`, and `-F_IS > 0.20`) while preserving Wahlund homozygote excess from population structure.
 - **`--window` / `--window-kb`** — LD window as a variant count (default `200`, PLINK-compatible) or as a physical distance in kb from `.bim` positions (e.g. `--window-kb 500`; needs a position-sorted `.bim`). A kb window means the same distance on any array and needs no cleanup passes; compare against `plink --indep-pairwise 500kb 1 0.4`.
 - **`--transv`** — breaks ties in favour of transversions over ancient-DNA-damaged transitions (C↔T, G↔A).
+
+### Choosing priority samples
+
+Nominated samples compete for the same LD blocks, and with the default `--weighting adaptive` the sample with fewer calls tends to win a contested block. Each sample you add therefore reduces the gain of the others, and adding samples **sparser** than the ones you care about costs the most.
+
+Six Natufians (12k–123k calls) were always nominated, and extra low-coverage ancient samples (5k–300k calls) were added either at random or sparsest-first (1240k, 300 modern `.DG` diploids for LD, `--maf 0.01 --geno 0.05`, `adaptive`; gain = SNPs kept relative to PLINK, averaged over the Natufians):
+
+| Extra samples nominated | Natufian gain (random extras) | Natufian gain (sparsest extras) |
+| ---: | ---: | ---: |
+| 0 | 2.31× | 2.31× |
+| 10 | 2.09× | 2.00× |
+| 25 | 1.93× | 1.75× |
+| 50 | 1.81× | 1.53× |
+| 100 | 1.67× | 1.36× |
+| all 1,937 | 1.40× | 1.40× |
+
+- **Nominate the samples your analysis is about**, not every low-coverage sample in the panel.
+- **Adding sparser samples costs the most.** If your focal samples are not the sparsest, every much sparser sample you add takes contested blocks from them.
+- **Large nominations are still safe.** With all 1,943 samples nominated, nominated samples kept 1.31× more of their SNPs than with PLINK on average, and samples never nominated still gained (1.14–1.28× on average across all runs, never below PLINK).
+
+*Random-order results varied by at most ±0.1× across 5 replicate orders.*
 
 ## Options
 
