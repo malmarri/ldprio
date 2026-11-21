@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
 
-use crate::ld::{build_ld_graph, find_backfill_candidates};
+use crate::ld::{build_ld_graph_window, find_backfill_candidates, Window};
 use crate::plink::{preview_list, resolve_samples, scan_bed, write_bed_subset, Bim, Fam, QcFilters};
 use crate::report::{fmt_int, write_report, ReportData};
 use crate::select::{backfill_select, greedy_select, PriorityPool, Weighting};
@@ -61,9 +61,14 @@ struct Args {
     #[arg(long = "ld-samples")]
     ld_samples: PathBuf,
 
-    /// Window in variants
+    /// Window in variants (PLINK-style; counted among surviving SNPs)
     #[arg(long, default_value_t = 200)]
     window: usize,
+
+    /// Window as physical distance in kb, from .bim positions (replaces --window;
+    /// LD-independence is reached in a single pass, no cleanup needed)
+    #[arg(long = "window-kb", conflicts_with = "window")]
+    window_kb: Option<f64>,
 
     /// Unused (kept for CLI compatibility with v1.x)
     #[arg(long, default_value_t = 25)]
@@ -165,6 +170,15 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
             args.window
         ));
     }
+    if let Some(kb) = args.window_kb {
+        if !(kb.is_finite() && kb > 0.0) {
+            return Err(format!("ERROR: --window-kb must be a positive number, got {}", kb));
+        }
+    }
+    let window = match args.window_kb {
+        Some(kb) => Window::Bp((kb * 1000.0).round() as u64),
+        None => Window::Variants(args.window),
+    };
     if args.max_cleanup == 0 {
         return Err(format!(
             "ERROR: --max-cleanup must be a positive integer, got {}",
@@ -208,6 +222,30 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     let fam = Fam::read(Path::new(&format!("{}.fam", args.bfile)))?;
     let bim = Bim::read(Path::new(&format!("{}.bim", args.bfile)))?;
     let n_auto = bim.variants.len();
+
+    // A physical window needs real, sorted positions on every autosomal SNP
+    if let Window::Bp(_) = window {
+        let n_nopos = bim.variants.iter().filter(|v| v.pos == 0).count();
+        if n_nopos > 0 {
+            return Err(format!(
+                "ERROR: --window-kb needs base-pair positions, but {} autosomal SNP(s) have position 0 or none in the .bim",
+                fmt_int(n_nopos)
+            ));
+        }
+        let mut last: [Option<(u64, &str)>; 23] = [None; 23];
+        for v in &bim.variants {
+            let c = v.chrom as usize;
+            if let Some((p, prev)) = last[c] {
+                if v.pos < p {
+                    return Err(format!(
+                        "ERROR: --window-kb needs the .bim sorted by position within each chromosome; {} (chr {}, {}) comes after {} ({})\n  Sort first, e.g. plink --bfile <in> --make-bed --out <sorted>",
+                        v.id, v.chrom, v.pos, prev, p
+                    ));
+                }
+            }
+            last[c] = Some((v.pos, v.id.as_str()));
+        }
+    }
     let n_fam = fam.samples.len();
 
     eprintln!("ldprio {}", version);
@@ -402,7 +440,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     let prefer_tv = args.prefer_transversions && n_tv_input > 0;
 
     let all_auto: Vec<usize> = (0..n_snps).collect();
-    let (adj, n_pairs) = build_ld_graph(&ld_matrix, &all_auto, &variants, args.window, args.r2);
+    let (adj, n_pairs) = build_ld_graph_window(&ld_matrix, &all_auto, &variants, window, args.r2);
     let mut current = greedy_select(&all_auto, &adj, &priority, &variants, prefer_tv);
     let n_greedy = current.len();
     let n_prio_after_greedy = current.iter().filter(|&&k| priority.in_pool(k)).count();
@@ -423,7 +461,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     let mut total_cleanup_removed = 0usize;
     for pass in 1..=args.max_cleanup {
         let (adj_i, n_pairs_i) =
-            build_ld_graph(&ld_matrix, &current, &variants, args.window, args.r2);
+            build_ld_graph_window(&ld_matrix, &current, &variants, window, args.r2);
         let (next, n_removed) = if n_pairs_i == 0 {
             (current, 0)
         } else {
@@ -435,9 +473,14 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
         total_cleanup_removed += n_removed;
         let n_keep = current.len();
         passes.push((pass, n_pairs_i, n_removed, n_keep));
+        let pass_label = if matches!(window, Window::Bp(_)) && pass == 1 {
+            "verification".to_string()
+        } else {
+            format!("cleanup pass {}", pass)
+        };
         eprintln!(
-            "      cleanup pass {}: {} residual pairs, removed {} -> {} SNPs",
-            pass,
+            "      {}: {} residual pairs, removed {} -> {} SNPs",
+            pass_label,
             fmt_int(n_pairs_i),
             fmt_int(n_removed),
             fmt_int(n_keep)
@@ -453,9 +496,9 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     // was removed during cleanup may now have no LD with any kept SNP within
     // `--window`. Recover them (priority SNPs first), preserving 0 residual LD.
     let mut backfill: Option<(usize, usize, usize)> = None;
-    if converged && total_cleanup_removed > 0 {
+    if let (true, true, Window::Variants(win_n)) = (converged, total_cleanup_removed > 0, window) {
         let candidates =
-            find_backfill_candidates(&ld_matrix, &current, &variants, args.window, args.r2);
+            find_backfill_candidates(&ld_matrix, &current, &variants, win_n, args.r2);
         if !candidates.is_empty() {
             let (recovered, n_added, n_added_prio) = backfill_select(
                 &current,
@@ -463,7 +506,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
                 &ld_matrix,
                 &priority,
                 &variants,
-                args.window,
+                win_n,
                 args.r2,
                 prefer_tv,
             );
@@ -553,7 +596,8 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
                 runtime_secs: start.elapsed().as_secs_f64(),
                 weighting: weighting.as_str().to_string(),
                 r2: args.r2,
-                window: args.window,
+                window: window.describe(),
+                single_pass: matches!(window, Window::Bp(_)),
                 n_input: bim.n_input,
                 n_auto,
                 n_snps,

@@ -81,9 +81,28 @@ impl LdMatrix {
     }
 }
 
+/// LD window: a count of variants (counted within `surviving`, PLINK-style) or a
+/// physical distance in base pairs (fixed, independent of which SNPs survive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Window {
+    Variants(usize),
+    Bp(u64),
+}
+
+impl Window {
+    pub fn describe(&self) -> String {
+        match *self {
+            Window::Variants(w) => format!("{} variants", w),
+            Window::Bp(bp) => format!("{} kb", (bp as f64) / 1000.0),
+        }
+    }
+}
+
 /// Build the sparse LD conflict graph over `surviving` (autosomal SNP indices)
 /// within `window` variants on the same chromosome, parallelized with rayon.
 /// Returns `(adj, n_pairs)` where `adj` is indexed by `0..surviving.len()`.
+/// (Library API, used by the validation tests; the binary calls `build_ld_graph_window`.)
+#[allow(dead_code)]
 pub fn build_ld_graph(
     ld: &LdMatrix,
     surviving: &[usize],
@@ -91,8 +110,21 @@ pub fn build_ld_graph(
     window: usize,
     r2_thresh: f64,
 ) -> (Vec<Vec<usize>>, usize) {
+    build_ld_graph_window(ld, surviving, variants, Window::Variants(window), r2_thresh)
+}
+
+/// As [`build_ld_graph`], for either window type. With `Window::Bp(d)`, pairs on the
+/// same chromosome whose positions differ by at most `d` bp are tested; positions
+/// must be non-decreasing within each chromosome in `surviving` order.
+pub fn build_ld_graph_window(
+    ld: &LdMatrix,
+    surviving: &[usize],
+    variants: &[Variant],
+    window: Window,
+    r2_thresh: f64,
+) -> (Vec<Vec<usize>>, usize) {
     let m = surviving.len();
-    if m < 2 || window < 2 {
+    if m < 2 || window == Window::Variants(0) || window == Window::Variants(1) {
         return (vec![Vec::new(); m], 0);
     }
 
@@ -130,12 +162,29 @@ pub fn build_ld_graph(
                 if ld.is_constant[snp_u] {
                     continue;
                 }
-                let j_end = (i + window).min(chr_len);
-                for j in (i + 1)..j_end {
-                    let v = chr_pos[j];
-                    let snp_v = surviving[v];
-                    if ld.pair_r2_ge(snp_u, snp_v, r2_thresh) {
-                        edges.push((u, v));
+                match window {
+                    Window::Variants(w) => {
+                        let j_end = (i + w).min(chr_len);
+                        for j in (i + 1)..j_end {
+                            let v = chr_pos[j];
+                            let snp_v = surviving[v];
+                            if ld.pair_r2_ge(snp_u, snp_v, r2_thresh) {
+                                edges.push((u, v));
+                            }
+                        }
+                    }
+                    Window::Bp(max_bp) => {
+                        let pos_u = variants[snp_u].pos;
+                        for j in (i + 1)..chr_len {
+                            let v = chr_pos[j];
+                            let snp_v = surviving[v];
+                            if variants[snp_v].pos.saturating_sub(pos_u) > max_bp {
+                                break;
+                            }
+                            if ld.pair_r2_ge(snp_u, snp_v, r2_thresh) {
+                                edges.push((u, v));
+                            }
+                        }
                     }
                 }
             }

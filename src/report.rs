@@ -9,7 +9,9 @@ pub struct ReportData {
     pub runtime_secs: f64,
     pub weighting: String,
     pub r2: f64,
-    pub window: usize,
+    pub window: String,
+    /// Physical (bp) window: the first LD pass is a verification, not a cleanup
+    pub single_pass: bool,
     pub n_input: usize,
     pub n_auto: usize,
     pub n_snps: usize,
@@ -158,7 +160,7 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
     };
 
     let ld_sub = if r.converged {
-        format!("no pair above r&sup2; {} within {} variants", r.r2, r.window)
+        format!("no pair above r&sup2; {} within {}", r.r2, esc(&r.window))
     } else {
         "raise --max-cleanup".to_string()
     };
@@ -268,7 +270,11 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
     steps.push(("After first LD pass".to_string(), r.greedy, String::new()));
     for &(i, pairs, removed, keep) in &r.passes {
         steps.push((
-            format!("Cleanup pass {}", i),
+            if r.single_pass && i == 1 {
+                "LD verification".to_string()
+            } else {
+                format!("Cleanup pass {}", i)
+            },
             keep,
             format!("{} residual pairs, removed {}", fmt_int(pairs), fmt_int(removed)),
         ));
@@ -307,7 +313,7 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
         ("LD samples", fmt_int(r.n_ld)),
         (
             "r&sup2; threshold / window",
-            format!("{} / {} variants", r.r2, r.window),
+            format!("{} / {}", r.r2, esc(&r.window)),
         ),
         (
             "Priority pool",

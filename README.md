@@ -42,8 +42,8 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 
 1. **Priority pool:** identifies SNPs covered by `--priority-samples`. Nominate only the sparse samples that need help.
 2. **LD-sample QC (optional):** filters autosomes by `--geno`, `--maf`, and `--excess-het` on `--ld-samples`.
-3. **LD graph & greedy selection:** computes exact pairwise Pearson r² on `--ld-samples` (use ≥30 high-quality diploids; avoid pseudo-haploids) across `--window` variants, keeps priority-pool SNPs first according to `--weighting`, then fills the rest in genomic order.
-4. **Cleanup:** iterates LD checks in memory until zero residual pairs above `--r2` remain within `--window`.
+3. **LD graph & greedy selection:** computes exact pairwise Pearson r² on `--ld-samples` (use ≥30 high-quality diploids; avoid pseudo-haploids) across the window (`--window` variants, or `--window-kb`), keeps priority-pool SNPs first according to `--weighting`, then fills the rest in genomic order.
+4. **Cleanup:** with `--window` (counted in variants, as in PLINK), pruning widens the physical span of the window, so LD checks are repeated in memory until zero residual pairs above `--r2` remain, and SNPs left without a kept LD partner are recovered. With `--window-kb` the window is a fixed distance, so the first pass is already LD-independent and is simply verified.
 
 ### Key flags
 
@@ -52,6 +52,7 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
   - `inverse` — static $1 / (\text{called SNPs})$ weighting; favours the sparsest samples.
   - `fair` — samples take turns; evens out total SNPs kept per sample.
 - **`--maf` / `--geno` / `--excess-het`** — optional QC calculated on `--ld-samples` before pruning. `--excess-het auto` removes excess-heterozygosity artifacts (`p < 1e-4` for N < 100 else `1e-6`, and `-F_IS > 0.20`) while preserving Wahlund homozygote excess from population structure.
+- **`--window` / `--window-kb`** — LD window as a variant count (default `200`, PLINK-compatible) or as a physical distance in kb from `.bim` positions (e.g. `--window-kb 500`; needs a position-sorted `.bim`). A kb window means the same distance on any array and needs no cleanup passes; compare against `plink --indep-pairwise 500kb 1 0.4`.
 - **`--transv`** — breaks ties in favour of transversions over ancient-DNA-damaged transitions (C↔T, G↔A).
 
 ## Options
@@ -63,6 +64,7 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 | `--priority-samples` | required | Samples whose covered SNPs to favour |
 | `--ld-samples` | required | High-quality diploid samples for LD & QC (≥30 recommended) |
 | `--window` | `200` | Window size in variants |
+| `--window-kb` | off | Window as physical distance in kb (replaces `--window`) |
 | `--r2` | `0.4` | r² threshold |
 | `--maf` | off | Minimum MAF in `--ld-samples` (e.g. `0.01`) |
 | `--geno` | off | Maximum missing rate in `--ld-samples` (e.g. `0.05`) |
@@ -71,7 +73,7 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 | `--transv` | off | Prefer transversions on ties |
 | `--make-bed` | off | Write pruned `.bed/.bim/.fam` |
 | `--report` | off | Write self-contained HTML report (`<out>.report.html`) |
-| `--max-cleanup` | `10` | Maximum cleanup passes |
+| `--max-cleanup` | `10` | Maximum cleanup passes (`--window` only) |
 | `-t`, `--threads` | `0` | Threads (`0` = all cores) |
 
 ## Benchmark: Southern Arc Natufians (1240k)

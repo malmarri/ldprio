@@ -927,3 +927,180 @@ fn test_backfill_recovers_orphaned_priority_snp_after_cleanup() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_window_kb_single_pass_independent_and_maximal_and_input_checks() {
+    // Irregularly spaced SNPs (tight clusters + big gaps) on two chromosomes, with
+    // haplotype-block LD and missingness. In --window-kb mode the output must be:
+    //   (a) LD-independent: no kept pair within the bp window has r2 >= threshold,
+    //   (b) maximal: every dropped SNP has a kept LD partner within the bp window,
+    //   (c) reached in one pass: cleanup pass 1 finds 0 residual pairs.
+    let dir = temp_dir("window_kb");
+    let mut rng = Rng::new(20261121);
+    let (n_ld, n_prio) = (60usize, 4usize);
+    let n = n_ld + n_prio;
+    let mut fam_owned = Vec::new();
+    for i in 0..n_ld {
+        fam_owned.push(("LD".to_string(), format!("M{}", i)));
+    }
+    for i in 0..n_prio {
+        fam_owned.push(("ANC".to_string(), format!("A{}", i)));
+    }
+    let fam_refs: Vec<(&str, &str)> = fam_owned.iter().map(|(f, i)| (f.as_str(), i.as_str())).collect();
+
+    let mut bim_owned: Vec<(String, String, usize)> = Vec::new();
+    let mut geno: Vec<Vec<u8>> = Vec::new();
+    for chrom in ["1", "2"] {
+        let mut hap = vec![[0u8; 2]; n];
+        let mut pos = 10_000usize;
+        for j in 0..400 {
+            // spacing: mostly 1-8 kb, occasionally a 30-150 kb gap
+            pos += if rng.next_f64() < 0.08 {
+                30_000 + (rng.next_u64() % 120_000) as usize
+            } else {
+                1_000 + (rng.next_u64() % 7_000) as usize
+            };
+            if j == 0 || rng.next_f64() < 0.12 {
+                let f = 0.1 + 0.8 * rng.next_f64();
+                for s in 0..n {
+                    for h in 0..2 {
+                        hap[s][h] = (rng.next_f64() < f) as u8;
+                    }
+                }
+            } else {
+                for s in 0..n {
+                    for h in 0..2 {
+                        if rng.next_f64() < 0.05 {
+                            hap[s][h] ^= 1;
+                        }
+                    }
+                }
+            }
+            let row: Vec<u8> = (0..n)
+                .map(|s| {
+                    let miss = if s < n_ld { 0.05 } else { 0.7 };
+                    if rng.next_f64() < miss {
+                        1
+                    } else {
+                        match hap[s][0] + hap[s][1] {
+                            0 => 0,
+                            1 => 2,
+                            _ => 3,
+                        }
+                    }
+                })
+                .collect();
+            bim_owned.push((chrom.to_string(), format!("{}_{}", chrom, pos), pos));
+            geno.push(row);
+        }
+    }
+    let bim_rows: Vec<(&str, &str, usize, &str, &str)> =
+        bim_owned.iter().map(|(c, id, p)| (c.as_str(), id.as_str(), *p, "A", "C")).collect();
+    let prefix = dir.join("kb_panel");
+    write_plink_fileset(&prefix, &fam_refs, &bim_rows, &geno);
+    let ld_list = dir.join("ld.txt");
+    fs::write(&ld_list, (0..n_ld).map(|i| format!("M{}\n", i)).collect::<String>()).unwrap();
+    let prio_list = dir.join("prio.txt");
+    fs::write(&prio_list, (0..n_prio).map(|i| format!("A{}\n", i)).collect::<String>()).unwrap();
+
+    let (kb, thr) = (25.0f64, 0.3f64);
+    let max_bp = (kb * 1000.0) as usize;
+    let run = |extra: &[&str], out: &Path| {
+        let mut args: Vec<String> = vec![
+            "--bfile".into(), prefix.to_str().unwrap().into(),
+            "--priority-samples".into(), prio_list.to_str().unwrap().into(),
+            "--ld-samples".into(), ld_list.to_str().unwrap().into(),
+            "--r2".into(), thr.to_string(),
+            "--out".into(), out.to_str().unwrap().into(),
+        ];
+        args.extend(extra.iter().map(|s| s.to_string()));
+        Command::new(ldprio_bin()).args(&args).output().unwrap()
+    };
+
+    for weighting in ["adaptive", "inverse", "fair"] {
+        let out = dir.join(format!("out_{}", weighting));
+        let res = run(&["--window-kb", &kb.to_string(), "--weighting", weighting], &out);
+        let stderr = String::from_utf8_lossy(&res.stderr);
+        assert!(res.status.success(), "{} run failed:\n{}", weighting, stderr);
+        assert!(stderr.contains("verification: 0 residual pairs"),
+            "{}: kb window must be independent after the first pass:\n{}", weighting, stderr);
+        assert!(!stderr.contains("backfill"), "{}: no backfill expected in kb mode", weighting);
+
+        let kept: std::collections::HashSet<String> = fs::read_to_string(out.with_extension("snplist"))
+            .unwrap().lines().map(|s| s.to_string()).collect();
+        let ld_of = |k: usize| geno[k][..n_ld].to_vec();
+        let in_window = |a: usize, b: usize| {
+            bim_owned[a].0 == bim_owned[b].0 && bim_owned[a].2.abs_diff(bim_owned[b].2) <= max_bp
+        };
+        let is_kept = |k: usize| kept.contains(&bim_owned[k].1);
+        let m = bim_owned.len();
+        for a in 0..m {
+            for b in (a + 1)..m {
+                if !in_window(a, b) {
+                    continue;
+                }
+                let r2 = naive_r2(&ld_of(a), &ld_of(b)).unwrap_or(0.0);
+                // (a) independence
+                assert!(!(is_kept(a) && is_kept(b) && r2 >= thr + 1e-9),
+                    "{}: kept pair {} / {} has r2={} within {} kb", weighting, bim_owned[a].1, bim_owned[b].1, r2, kb);
+            }
+        }
+        // (b) maximality: every dropped SNP is blocked by some kept SNP within the window
+        for a in (0..m).filter(|&a| !is_kept(a)) {
+            let blocked = (0..m).any(|b| b != a && is_kept(b) && in_window(a, b)
+                && naive_r2(&ld_of(a), &ld_of(b)).unwrap_or(0.0) >= thr - 1e-9);
+            assert!(blocked, "{}: dropped {} has no kept LD partner within {} kb", weighting, bim_owned[a].1, kb);
+        }
+        assert!(kept.len() < m, "test data should contain LD to prune");
+    }
+
+    // Report shows the kb window
+    let out = dir.join("out_report");
+    let res = run(&["--window-kb", "25", "--report"], &out);
+    assert!(res.status.success());
+    let html = fs::read_to_string(format!("{}.report.html", out.display())).unwrap();
+    assert!(html.contains("25 kb"), "report should describe the kb window");
+    assert!(html.contains("LD verification"), "report should label the single kb pass as verification");
+
+    // --window and --window-kb are mutually exclusive
+    let res = run(&["--window-kb", "25", "--window", "50"], &dir.join("out_conflict"));
+    assert!(!res.status.success());
+
+    // Non-positive kb rejected
+    let res = run(&["--window-kb", "0"], &dir.join("out_zero"));
+    assert!(!res.status.success());
+    assert!(String::from_utf8_lossy(&res.stderr).contains("--window-kb must be a positive number"));
+
+    // Unsorted positions rejected in kb mode (but fine for the variant-count window)
+    let mut swapped = bim_rows.clone();
+    swapped.swap(10, 11);
+    let unsorted = dir.join("unsorted");
+    write_plink_fileset(&unsorted, &fam_refs, &swapped, &geno);
+    let base_args = |p: &Path, out: &Path, kb_mode: bool| {
+        let mut a: Vec<String> = vec![
+            "--bfile".into(), p.to_str().unwrap().into(),
+            "--priority-samples".into(), prio_list.to_str().unwrap().into(),
+            "--ld-samples".into(), ld_list.to_str().unwrap().into(),
+            "--out".into(), out.to_str().unwrap().into(),
+        ];
+        if kb_mode {
+            a.extend(["--window-kb".to_string(), "25".to_string()]);
+        }
+        Command::new(ldprio_bin()).args(&a).output().unwrap()
+    };
+    let res = base_args(&unsorted, &dir.join("o1"), true);
+    assert!(!res.status.success());
+    assert!(String::from_utf8_lossy(&res.stderr).contains("sorted by position"));
+    assert!(base_args(&unsorted, &dir.join("o2"), false).status.success());
+
+    // Missing positions (0) rejected in kb mode
+    let mut nopos = bim_rows.clone();
+    nopos[5].2 = 0;
+    let zero = dir.join("zeropos");
+    write_plink_fileset(&zero, &fam_refs, &nopos, &geno);
+    let res = base_args(&zero, &dir.join("o3"), true);
+    assert!(!res.status.success());
+    assert!(String::from_utf8_lossy(&res.stderr).contains("needs base-pair positions"));
+
+    let _ = fs::remove_dir_all(&dir);
+}

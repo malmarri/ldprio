@@ -137,6 +137,8 @@ pub struct Variant {
     pub orig_idx: usize,
     pub chrom: u8,
     pub id: String,
+    /// Base-pair position from the .bim (0 if missing/unparseable, as in PLINK).
+    pub pos: u64,
     pub is_tv: bool,
     pub raw_line: String,
 }
@@ -203,6 +205,10 @@ impl Bim {
                 continue;
             }
             let id = fields[1].to_string();
+            let pos = fields
+                .get(3)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
             if !seen.insert(id.clone()) && dupe_set.insert(id.clone()) {
                 dupes.push(id.clone());
             }
@@ -215,6 +221,7 @@ impl Bim {
                 orig_idx,
                 chrom,
                 id,
+                pos,
                 is_tv: tv,
                 raw_line: line,
             });
