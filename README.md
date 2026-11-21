@@ -124,7 +124,11 @@ To measure this, we reran the [Natufian benchmark](#benchmark-southern-arc-natuf
 
 ## Performance
 
-Runtime and peak memory on the full Natufian benchmark dataset (1,150,639 autosomal SNPs × 5,940 individuals, 6 priority samples, 300 LD samples, `--maf 0.01 --geno 0.05`), Apple M2 Pro laptop (16 GB RAM):
+Runtime and peak memory on the full Natufian benchmark dataset (1,150,639 autosomal SNPs × 5,940 individuals) on an Apple M2 Pro laptop (16 GB RAM), with the [benchmark](#benchmark-southern-arc-natufians-1240k) settings:
+
+- **Priority samples:** the 6 Natufians (`ISR_Natufian_EpiP`: I0861_d, I1069_published, I1072_d, I1685_d, I1687_d, I1690_published).
+- **LD samples:** the 300 modern `.DG` diploids (IIDs starting `S_`, `A_` or `B_`).
+- **Settings:** `--maf 0.01 --geno 0.05`, default window (200 variants, r² 0.4), `adaptive` weighting.
 
 | Threads | Time | Peak memory |
 | ---: | ---: | ---: |
