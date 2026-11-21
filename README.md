@@ -122,6 +122,17 @@ To measure this, we reran the [Natufian benchmark](#benchmark-southern-arc-natuf
 
 *Random-order results varied by at most ±0.1× across 5 replicate orders.*
 
+## Performance
+
+Runtime and peak memory on the full Natufian benchmark dataset (1,150,639 autosomal SNPs × 5,940 individuals, 6 priority samples, 300 LD samples, `--maf 0.01 --geno 0.05`), Apple M2 Pro laptop (16 GB RAM):
+
+| Threads | Time | Peak memory |
+| ---: | ---: | ---: |
+| 1 (`-t 1`) | 18.9 s | 686 MB |
+| 8 (`-t 8`) | 8.3 s | 683 MB |
+
+Both runs give identical output.
+
 ## Tests
 
 ```bash
