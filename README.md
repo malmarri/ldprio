@@ -105,22 +105,22 @@ Evaluated on the full public 1240k dataset from Lazaridis, Alpaslan-Roodenberg e
 
 Nominated samples compete for the same LD blocks, and with the default `--weighting adaptive` the sample with fewer calls tends to win a contested block. Each sample you add therefore reduces the gain of the others, and adding samples **sparser** than the ones you care about costs the most.
 
-To measure this, we reran the [Natufian benchmark](#benchmark-southern-arc-natufians-1240k) above with the same settings, keeping its six Natufians (12k–123k calls) nominated throughout. We then also nominated more low-coverage ancient samples from the same dataset (1,937 samples with 5k–300k calls), adding them either in random order or sparsest first. The table shows the Natufians' gain: the number of their SNPs kept by `ldprio` relative to PLINK, averaged over the six.
+To measure this, we reran the [Natufian benchmark](#benchmark-southern-arc-natufians-1240k) above with the same settings, keeping its six Natufians (12k–123k calls) nominated throughout. We then also nominated more low-coverage ancient samples from the same dataset (1,334 samples called at 5,000–150,000 sites), adding them either in random order or sparsest first. The table shows the Natufians' gain: the number of their SNPs kept by `ldprio` relative to PLINK, averaged over the six.
 
 | Extra samples nominated | Natufian gain (random extras) | Natufian gain (sparsest extras) |
 | ---: | ---: | ---: |
 | 0 | 2.31× | 2.31× |
-| 10 | 2.09× | 2.00× |
-| 25 | 1.93× | 1.75× |
-| 50 | 1.81× | 1.53× |
-| 100 | 1.67× | 1.36× |
-| all 1,937 | 1.40× | 1.40× |
+| 10 | 2.08× | 2.00× |
+| 25 | 1.90× | 1.74× |
+| 50 | 1.72× | 1.52× |
+| 100 | 1.57× | 1.36× |
+| all 1,334 | 1.40× | 1.40× |
 
 - **Nominate the samples your analysis is about**, not every low-coverage sample in the panel.
 - **Adding sparser samples costs the most.** If your focal samples are not the sparsest, every much sparser sample you add takes contested blocks from them.
-- **Large nominations are still safe.** With all 1,943 samples nominated, nominated samples kept 1.31× more of their SNPs than with PLINK on average, and samples never nominated still gained (1.14–1.28× on average across all runs, never below PLINK).
+- **Large nominations are still safe.** With all 1,340 samples nominated, they kept 1.32× more of their SNPs than with PLINK on average, and no sample, nominated or not, fell below PLINK in any run (200 held-out samples that were never nominated gained 1.15–1.28× on average).
 
-*Random-order results varied by at most ±0.1× across 5 replicate orders.*
+*Random-order results varied by at most ±0.05× across 5 replicate orders.*
 
 ## Performance
 
