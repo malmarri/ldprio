@@ -419,7 +419,7 @@ fn test_multipass_cleanup_and_non_autosomal_interleaving_and_transversions() {
         .unwrap();
     assert!(!bad_out.status.success(), "ambiguous IID should fail");
 
-    // 2. Run with window=6, --prefer-transversions, --make-bed, --report
+    // 2. Run with window=6, --transv, --make-bed, --report
     let out_prefix = dir.join("pruned");
     let res = Command::new(ldprio_bin())
         .args([
@@ -433,7 +433,7 @@ fn test_multipass_cleanup_and_non_autosomal_interleaving_and_transversions() {
             "6",
             "--r2",
             "0.4",
-            "--prefer-transversions",
+            "--transv",
             "--make-bed",
             "--report",
             "--out",

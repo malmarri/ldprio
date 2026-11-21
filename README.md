@@ -52,7 +52,7 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
   - `inverse` — static $1 / (\text{called SNPs})$ weighting; favours the sparsest samples.
   - `fair` — samples take turns; evens out total SNPs kept per sample.
 - **`--maf` / `--geno` / `--excess-het`** — optional QC calculated on `--ld-samples` before pruning. `--excess-het auto` removes excess-heterozygosity artifacts (`p < 1e-4` for N < 100 else `1e-6`, and `-F_IS > 0.20`) while preserving Wahlund homozygote excess from population structure.
-- **`--prefer-transversions`** — breaks ties in favour of transversions over ancient-DNA-damaged transitions (C↔T, G↔A).
+- **`--transv`** — breaks ties in favour of transversions over ancient-DNA-damaged transitions (C↔T, G↔A).
 
 ## Options
 
@@ -68,7 +68,7 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 | `--geno` | off | Maximum missing rate in `--ld-samples` (e.g. `0.05`) |
 | `--excess-het` | off | One-sided excess-het p-value in `--ld-samples` (e.g. `1e-6` or `auto`) |
 | `--weighting` | `adaptive` | `adaptive`, `inverse`, or `fair` |
-| `--prefer-transversions` | off | Prefer transversions on ties |
+| `--transv` | off | Prefer transversions on ties |
 | `--make-bed` | off | Write pruned `.bed/.bim/.fam` |
 | `--report` | off | Write self-contained HTML report (`<out>.report.html`) |
 | `--max-cleanup` | `10` | Maximum cleanup passes |
@@ -97,8 +97,6 @@ Evaluated on the full public 1240k dataset from Lazaridis, Alpaslan-Roodenberg e
 | **Mean share** | | **31.3%** | **72.3%** | | |
 
 *\*Adjusted for the 1.08× difference in overall pruned panel size (`372,301` vs. `345,784` SNPs).*
-
-Without `--maf`/`--geno`, Natufian shares rise to 61–94%, but the panel then keeps ~10k SNPs that are monomorphic in the moderns (`ldprio` never evaluates zero-variance SNPs for LD; PLINK always prunes them).
 
 ## Tests
 

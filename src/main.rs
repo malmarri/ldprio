@@ -90,7 +90,7 @@ struct Args {
     weighting: WeightingArg,
 
     /// Among otherwise equal SNPs, keep transversions over transitions (C<->T, G<->A)
-    #[arg(long = "prefer-transversions")]
+    #[arg(long = "transv", alias = "prefer-transversions")]
     prefer_transversions: bool,
 
     /// Also write a self-contained HTML report (<out>.report.html)
@@ -396,7 +396,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
     if args.prefer_transversions && n_tv_input == 0 {
         emit(
             &mut messages,
-            "      WARNING: --prefer-transversions found no A/C/G/T transversion SNPs in the .bim (alleles missing or coded 0?); the option has no effect.",
+            "      WARNING: --transv found no A/C/G/T transversion SNPs in the .bim (alleles missing or coded 0?); the option has no effect.",
         );
     }
     let prefer_tv = args.prefer_transversions && n_tv_input > 0;

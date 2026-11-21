@@ -109,7 +109,7 @@ impl PriorityPool {
 }
 
 /// Quantize float score to 12 decimal places so exact mathematical ties
-/// are not broken by 1-ULP floating-point rounding before `--prefer-transversions`.
+/// are not broken by 1-ULP floating-point rounding before `--transv`.
 #[inline]
 fn quantize_weight(w: f64) -> i64 {
     (w * 1e12).round() as i64
@@ -407,7 +407,7 @@ pub fn greedy_select(
 
 /// Recover dropped SNPs that have no LD with `kept` (candidates from
 /// `find_backfill_candidates`), inserting priority SNPs first (respecting
-/// `--weighting` and `--prefer-transversions`), then non-priority SNPs.
+/// `--weighting` and `--transv`), then non-priority SNPs.
 /// Each accepted SNP is checked against previously accepted backfill SNPs
 /// within `±(window - 1)` in the growing kept set, guaranteeing 0 residual LD.
 /// Returns `(new_kept_sorted, n_added, n_added_priority)`.
