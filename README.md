@@ -76,19 +76,29 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 
 ## Benchmark: Southern Arc Natufians (1240k)
 
-Evaluated on the full public 1240k dataset from Lazaridis, Alpaslan-Roodenberg et al., *Science* (2022) ([Harvard Dataverse: `doi:10.7910/DVN/3AR0CD`](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/3AR0CD)) — **1,150,639 autosomal SNPs × 5,940 individuals**, using 200 modern `.DG` diploids for LD (`--window 200 --r2 0.4`) and the 6 Epipaleolithic Natufian (`ISR_Natufian_EpiP`) samples as `--priority-samples`. `ldprio` pruned the 1.7 GB dataset to verified zero residual LD in **~9 seconds** (453,009 SNPs vs. 376,252 for `plink --indep-pairwise 200 25 0.4`):
+Evaluated on the full public 1240k dataset from Lazaridis, Alpaslan-Roodenberg et al., *Science* (2022) ([Harvard Dataverse: `doi:10.7910/DVN/3AR0CD`](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/3AR0CD)) — **1,150,639 autosomal SNPs × 5,940 individuals** — with the 6 Epipaleolithic Natufian (`ISR_Natufian_EpiP`) samples as `--priority-samples`.
+
+- **LD samples:** all 300 modern diploids — every `.DG` sample with an `S_`, `A_` or `B_` IID prefix. The six archaic/ancient `.DG` genomes (Altai, Vindija, Denisova, Ust'-Ishim, Loschbour, Stuttgart) are excluded; all other samples in the dataset are pseudo-haploid.
+  ```bash
+  awk '$2 ~ /^[SAB]_.*\.DG$/ {print $1"\t"$2}' SouthernArc_Public.fam > ld_samples.txt
+  ```
+- **Same QC for both tools:** `--maf 0.01 --geno 0.05` on the LD samples (1,024,064 SNPs pass, identically in `ldprio` and PLINK), then `--window 200 --r2 0.4` (PLINK: `--indep-pairwise 200 25 0.4`).
+
+`ldprio` pruned the 1.7 GB dataset in **~8 seconds** (Apple M2 Pro) to 372,301 SNPs vs. 345,784 for PLINK. Re-running `plink --indep-pairwise 200 25 0.4` on the `ldprio` output prunes **0 SNPs**.
 
 | Natufian sample | Input calls | Standard PLINK | `ldprio` (`adaptive`) | Raw gain | Share-of-panel gain* |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `I1687_d` | 12,883 | 4,352 (33.8%) | **12,216 (94.8%)** | **+181%** | **2.33×** |
-| `I1685_d` | 15,262 | 5,270 (34.5%) | **13,646 (89.4%)** | **+159%** | **2.15×** |
-| `I0861_d` | 16,613 | 5,692 (34.3%) | **14,243 (85.7%)** | **+150%** | **2.08×** |
-| `I1069_published` | 26,699 | 8,946 (33.5%) | **21,108 (79.1%)** | **+136%** | **1.96×** |
-| `I1690_published` | 29,423 | 9,829 (33.4%) | **21,822 (74.2%)** | **+122%** | **1.84×** |
-| `I1072_d` | 122,713 | 41,854 (34.1%) | **79,070 (64.4%)** | **+89%** | **1.57×** |
-| **Mean share** | | **33.9%** | **81.3%** | | |
+| `I1687_d` | 12,883 | 4,046 (31.4%) | **11,028 (85.6%)** | **+173%** | **2.53×** |
+| `I1685_d` | 15,262 | 4,855 (31.8%) | **12,249 (80.3%)** | **+152%** | **2.34×** |
+| `I0861_d` | 16,613 | 5,256 (31.6%) | **12,663 (76.2%)** | **+141%** | **2.24×** |
+| `I1069_published` | 26,699 | 8,155 (30.5%) | **18,727 (70.1%)** | **+130%** | **2.13×** |
+| `I1690_published` | 29,423 | 9,096 (30.9%) | **19,246 (65.4%)** | **+112%** | **1.97×** |
+| `I1072_d` | 122,713 | 38,596 (31.5%) | **68,781 (56.1%)** | **+78%** | **1.66×** |
+| **Mean share** | | **31.3%** | **72.3%** | | |
 
-*\*Adjusted for the 1.20× difference in overall pruned panel size (`453,009` vs. `376,252` SNPs).*
+*\*Adjusted for the 1.08× difference in overall pruned panel size (`372,301` vs. `345,784` SNPs).*
+
+Without `--maf`/`--geno`, Natufian shares rise to 61–94%, but the panel then keeps ~10k SNPs that are monomorphic in the moderns (`ldprio` never evaluates zero-variance SNPs for LD; PLINK always prunes them).
 
 ## Tests
 
