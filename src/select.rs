@@ -34,7 +34,7 @@ pub enum PriorityPool {
 
 fn build_cover(calls: &PriorityCalls, n_snps: usize) -> Vec<Vec<u32>> {
     let mut cover = vec![Vec::new(); n_snps];
-    for k in 0..n_snps {
+    for (k, slot) in cover.iter_mut().enumerate() {
         let base = k * calls.n_words;
         let mut samples = Vec::new();
         for w in 0..calls.n_words {
@@ -45,7 +45,7 @@ fn build_cover(calls: &PriorityCalls, n_snps: usize) -> Vec<Vec<u32>> {
                 word &= word - 1;
             }
         }
-        cover[k] = samples;
+        *slot = samples;
     }
     cover
 }
@@ -71,7 +71,7 @@ impl PriorityPool {
                     .map(|&c| if c > 0 { 1.0 / (c as f64) } else { 0.0 })
                     .collect();
                 let mut weights = vec![0.0f64; n_snps];
-                for k in 0..n_snps {
+                for (k, wk) in weights.iter_mut().enumerate() {
                     let base = k * calls.n_words;
                     let mut sum = 0.0f64;
                     for w in 0..calls.n_words {
@@ -82,7 +82,7 @@ impl PriorityPool {
                             word &= word - 1;
                         }
                     }
-                    weights[k] = sum;
+                    *wk = sum;
                 }
                 PriorityPool::Inverse(weights)
             }
@@ -411,6 +411,9 @@ pub fn greedy_select(
 /// Each accepted SNP is checked against previously accepted backfill SNPs
 /// within `±(window - 1)` in the growing kept set, guaranteeing 0 residual LD.
 /// Returns `(new_kept_sorted, n_added, n_added_priority)`.
+// All eight inputs are independent pieces of run state (kept set, candidates, LD data,
+// weighting, variants, window, threshold, transversion preference).
+#[allow(clippy::too_many_arguments)]
 pub fn backfill_select(
     kept: &[usize],
     candidates: &[usize],
@@ -503,7 +506,8 @@ pub fn backfill_select(
     // (we only need to check against newly added entries within ±(window - 1) because all
     // candidates already passed the check against every original kept SNP within ±(window - 1),
     // and insertions only increase distances to original kept SNPs).
-    let mut kept_by_chr: [Vec<(usize, bool)>; 23] = std::array::from_fn(|_| Vec::new());
+    let n_chrom = 1 + variants.iter().map(|v| v.chrom as usize).max().unwrap_or(0);
+    let mut kept_by_chr: Vec<Vec<(usize, bool)>> = vec![Vec::new(); n_chrom];
     for &k in kept {
         kept_by_chr[variants[k].chrom as usize].push((k, false));
     }

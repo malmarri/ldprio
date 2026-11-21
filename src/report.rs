@@ -97,7 +97,7 @@ pub fn fmt_int(x: usize) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(b as char);
@@ -193,6 +193,11 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
     ]
     .concat();
 
+    let calls_scope = if r.qc_summary.is_some() {
+        "among SNPs passing LD-sample QC"
+    } else {
+        "in the input panel"
+    };
     let (per_sample_hint, per_sample) = if samples.len() <= 40 {
         let mut rows = String::new();
         for (iid, avail, kept) in &samples {
@@ -213,7 +218,7 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
             ));
         }
         (
-            "<p class=\"hint\">Bar = share of the sample's own SNPs (those it has calls at in the input panel) that survived pruning.</p>",
+            format!("<p class=\"hint\">Bar = share of the sample's own SNPs (those it has calls at {}) that survived pruning.</p>", calls_scope),
             rows,
         )
     } else {
@@ -249,7 +254,7 @@ pub fn write_report(path: &str, r: &ReportData) -> Result<(), String> {
             ));
         }
         (
-            "<p class=\"hint\">Number of priority samples by share of their own SNPs (those they have calls at in the input panel) that survived pruning.</p>",
+            format!("<p class=\"hint\">Number of priority samples by share of their own SNPs (those they have calls at {}) that survived pruning.</p>", calls_scope),
             format!(
                 "<div class=\"hist\">{}</div><h3 style=\"font-size:14px;margin:22px 0 0\">15 samples with the fewest SNPs kept</h3><table><tr><th>Sample</th><th class=\"r\">SNPs with calls</th><th class=\"r\">SNPs kept</th><th class=\"r\">Share kept</th></tr>{}</table>",
                 hist, trs

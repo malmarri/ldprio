@@ -101,8 +101,6 @@ impl Window {
 /// Build the sparse LD conflict graph over `surviving` (autosomal SNP indices)
 /// within `window` variants on the same chromosome, parallelized with rayon.
 /// Returns `(adj, n_pairs)` where `adj` is indexed by `0..surviving.len()`.
-/// (Library API, used by the validation tests; the binary calls `build_ld_graph_window`.)
-#[allow(dead_code)]
 pub fn build_ld_graph(
     ld: &LdMatrix,
     surviving: &[usize],
@@ -129,7 +127,8 @@ pub fn build_ld_graph_window(
     }
 
     // Group local positions 0..m by chromosome (preserving genomic order)
-    let mut by_chrom: [Vec<usize>; 23] = std::array::from_fn(|_| Vec::new());
+    let n_chrom = 1 + surviving.iter().map(|&k| variants[k].chrom as usize).max().unwrap_or(0);
+    let mut by_chrom: Vec<Vec<usize>> = vec![Vec::new(); n_chrom];
     for (local_idx, &auto_idx) in surviving.iter().enumerate() {
         by_chrom[variants[auto_idx].chrom as usize].push(local_idx);
     }
@@ -137,8 +136,8 @@ pub fn build_ld_graph_window(
     // Flatten into parallel work units: chunks of 256 anchor SNPs per chromosome
     const CHUNK: usize = 256;
     let mut tasks: Vec<(usize, usize, usize)> = Vec::new();
-    for c in 1..=22 {
-        let len = by_chrom[c].len();
+    for (c, chr_list) in by_chrom.iter().enumerate() {
+        let len = chr_list.len();
         if len < 2 {
             continue;
         }
@@ -165,8 +164,7 @@ pub fn build_ld_graph_window(
                 match window {
                     Window::Variants(w) => {
                         let j_end = (i + w).min(chr_len);
-                        for j in (i + 1)..j_end {
-                            let v = chr_pos[j];
+                        for &v in &chr_pos[(i + 1)..j_end] {
                             let snp_v = surviving[v];
                             if ld.pair_r2_ge(snp_u, snp_v, r2_thresh) {
                                 edges.push((u, v));
@@ -175,8 +173,7 @@ pub fn build_ld_graph_window(
                     }
                     Window::Bp(max_bp) => {
                         let pos_u = variants[snp_u].pos;
-                        for j in (i + 1)..chr_len {
-                            let v = chr_pos[j];
+                        for &v in &chr_pos[(i + 1)..] {
                             let snp_v = surviving[v];
                             if variants[snp_v].pos.saturating_sub(pos_u) > max_bp {
                                 break;
@@ -225,8 +222,9 @@ pub fn find_backfill_candidates(
     }
 
     // Group kept and dropped SNPs by chromosome (both sorted by auto_idx = genomic order)
-    let mut kept_by_chr: [Vec<usize>; 23] = std::array::from_fn(|_| Vec::new());
-    let mut drop_by_chr: [Vec<usize>; 23] = std::array::from_fn(|_| Vec::new());
+    let n_chrom = 1 + variants.iter().map(|v| v.chrom as usize).max().unwrap_or(0);
+    let mut kept_by_chr: Vec<Vec<usize>> = vec![Vec::new(); n_chrom];
+    let mut drop_by_chr: Vec<Vec<usize>> = vec![Vec::new(); n_chrom];
     for (k, v) in variants.iter().enumerate() {
         if is_kept[k] {
             kept_by_chr[v.chrom as usize].push(k);
@@ -236,7 +234,7 @@ pub fn find_backfill_candidates(
     }
 
     let reach = window - 1;
-    let per_chr: Vec<Vec<usize>> = (1..=22usize)
+    let per_chr: Vec<Vec<usize>> = (1..n_chrom)
         .into_par_iter()
         .map(|c| {
             let kchr = &kept_by_chr[c];

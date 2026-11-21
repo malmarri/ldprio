@@ -1,8 +1,10 @@
 [package]
 name = "ldprio"
-version = "2.4.1"
+version = "2.5.0"
 edition = "2021"
 description = "LD pruning that prioritizes SNPs in low-coverage samples (native Rust, no PLINK required)"
+license = "MIT"
+repository = "https://github.com/malmarri/ldprio"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

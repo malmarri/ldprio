@@ -36,7 +36,7 @@ curl -sL https://github.com/malmarri/ldprio/releases/latest/download/ldprio-maco
 
 - Writes `dataset_pruned.snplist`, plus `.bed/.bim/.fam` (`--make-bed`) and a self-contained HTML summary (`--report`).
 - Sample lists: one sample per line (`IID` or `FID<TAB>IID`).
-- Only autosomes (chromosomes 1–22) are pruned and written out.
+- Only autosomes (chromosomes 1–22) are pruned and written out; for other species set the autosome count with `--autosome-num N`, as in PLINK.
 
 ## How it works
 
@@ -95,6 +95,7 @@ Six Natufians (12k–123k calls) were always nominated, and extra low-coverage a
 | `--make-bed` | off | Write pruned `.bed/.bim/.fam` |
 | `--report` | off | Write self-contained HTML report (`<out>.report.html`) |
 | `--max-cleanup` | `10` | Maximum cleanup passes (`--window` only) |
+| `--autosome-num` | `22` | Number of autosomes (non-human data; chromosomes `1..N` are pruned) |
 | `-t`, `--threads` | `0` | Threads (`0` = all cores) |
 
 ## Benchmark: Southern Arc Natufians (1240k)
@@ -126,3 +127,7 @@ Evaluated on the full public 1240k dataset from Lazaridis, Alpaslan-Roodenberg e
 ```bash
 cargo test --release
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

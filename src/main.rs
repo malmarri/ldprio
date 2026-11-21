@@ -1,8 +1,3 @@
-mod ld;
-mod plink;
-mod report;
-mod select;
-
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -12,10 +7,10 @@ use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
 
-use crate::ld::{build_ld_graph_window, find_backfill_candidates, Window};
-use crate::plink::{preview_list, resolve_samples, scan_bed, write_bed_subset, Bim, Fam, QcFilters};
-use crate::report::{fmt_int, write_report, ReportData};
-use crate::select::{backfill_select, greedy_select, PriorityPool, Weighting};
+use ldprio::ld::{build_ld_graph_window, find_backfill_candidates, Window};
+use ldprio::plink::{preview_list, resolve_samples, scan_bed, write_bed_subset, Bim, Fam, QcFilters};
+use ldprio::report::{fmt_int, write_report, ReportData};
+use ldprio::select::{backfill_select, greedy_select, PriorityPool, Weighting};
 
 /// Above this many nominated samples, print a note on how they compete for LD blocks
 /// (real-data sweeps: each added sample, especially a sparser one, reduces the others' gain).
@@ -44,7 +39,7 @@ impl From<WeightingArg> for Weighting {
     name = "ldprio",
     version,
     about = "LD pruning that preserves SNPs covered by nominated low-coverage samples (native Rust, no PLINK required).",
-    after_help = "Sample lists: one per line, 'IID' or 'FID<tab>IID'.\nOnly autosomes (chromosomes 1-22) are pruned and written out."
+    after_help = "Sample lists: one per line, 'IID' or 'FID<tab>IID'.\nOnly autosomes (chromosomes 1-22, or 1-N with --autosome-num N) are pruned and written out."
 )]
 struct Args {
     /// Input PLINK 1 prefix (.bed/.bim/.fam)
@@ -111,6 +106,10 @@ struct Args {
     /// Cap on cleanup passes
     #[arg(long = "max-cleanup", default_value_t = 10)]
     max_cleanup: usize,
+
+    /// Number of autosomes for non-human data (as PLINK --autosome-num); chromosomes 1..N are pruned
+    #[arg(long = "autosome-num", default_value_t = 22, value_parser = clap::value_parser!(u8).range(1..=95))]
+    autosome_num: u8,
 
     /// Number of threads (0 = all available CPU cores)
     #[arg(long, short = 't', default_value_t = 0)]
@@ -222,7 +221,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
 
     // ---- 1. Read .fam & .bim ------------------------------------------------
     let fam = Fam::read(Path::new(&format!("{}.fam", args.bfile)))?;
-    let bim = Bim::read(Path::new(&format!("{}.bim", args.bfile)))?;
+    let bim = Bim::read_autosomes(Path::new(&format!("{}.bim", args.bfile)), args.autosome_num)?;
     let n_auto = bim.variants.len();
 
     // A physical window needs real, sorted positions on every autosomal SNP
@@ -234,7 +233,7 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
                 fmt_int(n_nopos)
             ));
         }
-        let mut last: [Option<(u64, &str)>; 23] = [None; 23];
+        let mut last: Vec<Option<(u64, &str)>> = vec![None; args.autosome_num as usize + 1];
         for v in &bim.variants {
             let c = v.chrom as usize;
             if let Some((p, prev)) = last[c] {
@@ -588,8 +587,8 @@ fn run(args: Args, start: Instant) -> Result<(), String> {
         let kept_calls = prio_calls.count_calls_on(&current);
         let sample_rows: Vec<(String, usize, usize)> = prio_labels
             .into_iter()
-            .zip(prio_calls.coverage.into_iter())
-            .zip(kept_calls.into_iter())
+            .zip(prio_calls.coverage)
+            .zip(kept_calls)
             .map(|((lab, av), kp)| (lab, av, kp))
             .collect();
         let cmd = std::env::args().collect::<Vec<_>>().join(" ");

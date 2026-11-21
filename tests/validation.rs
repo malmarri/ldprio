@@ -34,7 +34,7 @@ fn write_plink_fileset(
     geno: &[Vec<u8>],
 ) {
     let n_fam = fam_rows.len();
-    let rec = (n_fam + 3) / 4;
+    let rec = n_fam.div_ceil(4);
 
     // .fam
     {
@@ -536,7 +536,7 @@ fn test_large_scale_100k_snps_stability_and_thread_determinism() {
 
     // Generate Markov-chain decaying LD across 22 chromosomes + 5% missingness in LD samples
     // and 1%..15% varying coverage in ancient priority samples.
-    let rec = (n_fam + 3) / 4;
+    let rec = n_fam.div_ceil(4);
     let prefix = dir.join("big100k");
 
     // Write .fam
@@ -591,9 +591,9 @@ fn test_large_scale_100k_snps_stability_and_thread_determinism() {
             row_buf[s / 4] |= code << ((s % 4) * 2);
         }
         // Ancient pseudo-haploid calls
-        for a in 0..n_prio {
+        for (a, &cov) in anc_cov.iter().enumerate() {
             let s = n_ld + a;
-            let code = if rng.next_f64() < anc_cov[a] {
+            let code = if rng.next_f64() < cov {
                 if (rng.next_u64() & 1) == 0 { 0 } else { 3 }
             } else {
                 1
@@ -707,15 +707,15 @@ fn test_ld_sample_qc_filters_geno_maf_excess_het() {
     // 5 SNPs:
     // snp_good (chr1): 0% miss, MAF=0.5, exact HWE (25 hom1, 50 het, 25 hom2) -> PASS
     let mut snp_good = Vec::with_capacity(n_ld + n_prio);
-    snp_good.extend(std::iter::repeat(0).take(25));
-    snp_good.extend(std::iter::repeat(2).take(50));
-    snp_good.extend(std::iter::repeat(3).take(25));
+    snp_good.extend(std::iter::repeat_n(0, 25));
+    snp_good.extend(std::iter::repeat_n(2, 50));
+    snp_good.extend(std::iter::repeat_n(3, 25));
     snp_good.extend([0, 3]);
 
     // snp_high_miss (chr1): 20% missing in LD samples (> --geno 0.10) -> FAIL geno
     let mut snp_high_miss = snp_good.clone();
-    for i in 0..20 {
-        snp_high_miss[i] = 1;
+    for g in snp_high_miss.iter_mut().take(20) {
+        *g = 1;
     }
 
     // snp_low_maf (chr1): 1 het out of 100 LD samples (MAF = 0.005 < --maf 0.01) -> FAIL maf
@@ -725,15 +725,15 @@ fn test_ld_sample_qc_filters_geno_maf_excess_het() {
 
     // snp_paralog (chr1): 10 hom1, 80 het, 10 hom2 (excess_het = +0.60 > 0.25) -> FAIL excess-het
     let mut snp_paralog = Vec::with_capacity(n_ld + n_prio);
-    snp_paralog.extend(std::iter::repeat(0).take(10));
-    snp_paralog.extend(std::iter::repeat(2).take(80));
-    snp_paralog.extend(std::iter::repeat(3).take(10));
+    snp_paralog.extend(std::iter::repeat_n(0, 10));
+    snp_paralog.extend(std::iter::repeat_n(2, 80));
+    snp_paralog.extend(std::iter::repeat_n(3, 10));
     snp_paralog.extend([0, 3]);
 
     // snp_wahlund (chr2): 50 hom1, 0 het, 50 hom2 (excess_het = -1.0 <= 0.25) -> PASS!
     let mut snp_wahlund = Vec::with_capacity(n_ld + n_prio);
-    snp_wahlund.extend(std::iter::repeat(0).take(50));
-    snp_wahlund.extend(std::iter::repeat(3).take(50));
+    snp_wahlund.extend(std::iter::repeat_n(0, 50));
+    snp_wahlund.extend(std::iter::repeat_n(3, 50));
     snp_wahlund.extend([3, 1]);
 
     let bim_rows = [
@@ -962,16 +962,16 @@ fn test_window_kb_single_pass_independent_and_maximal_and_input_checks() {
             };
             if j == 0 || rng.next_f64() < 0.12 {
                 let f = 0.1 + 0.8 * rng.next_f64();
-                for s in 0..n {
-                    for h in 0..2 {
-                        hap[s][h] = (rng.next_f64() < f) as u8;
+                for hs in hap.iter_mut() {
+                    for x in hs.iter_mut() {
+                        *x = (rng.next_f64() < f) as u8;
                     }
                 }
             } else {
-                for s in 0..n {
-                    for h in 0..2 {
+                for hs in hap.iter_mut() {
+                    for x in hs.iter_mut() {
                         if rng.next_f64() < 0.05 {
-                            hap[s][h] ^= 1;
+                            *x ^= 1;
                         }
                     }
                 }
@@ -1148,5 +1148,94 @@ fn test_priority_count_note_above_ten_samples() {
         let html = fs::read_to_string(format!("{}.report.html", out.display())).unwrap();
         assert_eq!(html.contains("Choosing priority samples"), expect_note, "report note K={}", k);
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_autosome_num_duplicate_fam_ids_and_qc_report_wording() {
+    let dir = temp_dir("autosome_num");
+    let mut rng = Rng::new(11);
+    let (n_ld, n_prio) = (40usize, 2usize);
+    let n = n_ld + n_prio;
+    let fam_owned: Vec<(String, String)> = (0..n)
+        .map(|i| if i < n_ld { ("LD".to_string(), format!("M{}", i)) } else { ("ANC".to_string(), format!("A{}", i - n_ld)) })
+        .collect();
+    let fam_refs: Vec<(&str, &str)> = fam_owned.iter().map(|(f, i)| (f.as_str(), i.as_str())).collect();
+    // Independent random SNPs on numeric chromosomes 1, 23, 25 and 38 (e.g. a dog panel)
+    let chroms = ["1", "23", "25", "38"];
+    let ids: Vec<String> = (0..40).map(|j| format!("c{}_s{}", chroms[j / 10], j)).collect();
+    let bim_rows: Vec<(&str, &str, usize, &str, &str)> = ids
+        .iter()
+        .enumerate()
+        .map(|(j, id)| (chroms[j / 10], id.as_str(), 1000 * (j + 1), "A", "C"))
+        .collect();
+    let geno: Vec<Vec<u8>> = (0..40)
+        .map(|_| (0..n).map(|_| [0u8, 2, 3][(rng.next_u64() % 3) as usize]).collect())
+        .collect();
+    let prefix = dir.join("panel");
+    write_plink_fileset(&prefix, &fam_refs, &bim_rows, &geno);
+    let ld_list = dir.join("ld.txt");
+    fs::write(&ld_list, (0..n_ld).map(|i| format!("M{}\n", i)).collect::<String>()).unwrap();
+    let prio_list = dir.join("prio.txt");
+    fs::write(&prio_list, "A0\nA1\n").unwrap();
+
+    let run = |bfile: &Path, extra: &[&str], out: &Path| {
+        let mut args: Vec<String> = vec![
+            "--bfile".into(), bfile.to_str().unwrap().into(),
+            "--priority-samples".into(), prio_list.to_str().unwrap().into(),
+            "--ld-samples".into(), ld_list.to_str().unwrap().into(),
+            "--r2".into(), "0.9".into(),
+            "--out".into(), out.to_str().unwrap().into(),
+        ];
+        args.extend(extra.iter().map(|s| s.to_string()));
+        Command::new(ldprio_bin()).args(&args).output().unwrap()
+    };
+    let kept_chroms = |out: &Path| -> Vec<String> {
+        let mut c: Vec<String> = fs::read_to_string(out.with_extension("snplist"))
+            .unwrap()
+            .lines()
+            .map(|id| id.split('_').next().unwrap().to_string())
+            .collect();
+        c.dedup();
+        c
+    };
+
+    // Default: human autosomes only (chromosome 1 here; 23/25/38 dropped)
+    let out = dir.join("default");
+    let res = run(&prefix, &["--report"], &out);
+    assert!(res.status.success(), "{}", String::from_utf8_lossy(&res.stderr));
+    assert_eq!(kept_chroms(&out), vec!["c1"]);
+    assert!(String::from_utf8_lossy(&res.stderr).contains("30 non-autosomal dropped"));
+    // No QC -> report describes calls "in the input panel"
+    let html = fs::read_to_string(format!("{}.report.html", out.display())).unwrap();
+    assert!(html.contains("in the input panel") && !html.contains("passing LD-sample QC"));
+
+    // --autosome-num 25 keeps 1, 23, 25 (but not 38); 38 keeps everything
+    let out = dir.join("n25");
+    assert!(run(&prefix, &["--autosome-num", "25"], &out).status.success());
+    assert_eq!(kept_chroms(&out), vec!["c1", "c23", "c25"]);
+    let out = dir.join("n38");
+    assert!(run(&prefix, &["--autosome-num", "38", "--window-kb", "5"], &out).status.success());
+    assert_eq!(kept_chroms(&out), vec!["c1", "c23", "c25", "c38"]);
+    // Out-of-range values rejected
+    assert!(!run(&prefix, &["--autosome-num", "0"], &dir.join("n0")).status.success());
+    assert!(!run(&prefix, &["--autosome-num", "96"], &dir.join("n96")).status.success());
+
+    // With QC -> report describes calls "among SNPs passing LD-sample QC"
+    let out = dir.join("qc");
+    assert!(run(&prefix, &["--maf", "0.01", "--report"], &out).status.success());
+    let html = fs::read_to_string(format!("{}.report.html", out.display())).unwrap();
+    assert!(html.contains("passing LD-sample QC") && !html.contains("in the input panel"));
+
+    // Duplicate FID/IID row in the .fam is rejected (not silently resolved)
+    let dup = dir.join("dup");
+    let mut fam_dup = fam_refs.clone();
+    fam_dup[5] = fam_dup[4];
+    write_plink_fileset(&dup, &fam_dup, &bim_rows, &geno);
+    let res = run(&dup, &[], &dir.join("dup_out"));
+    assert!(!res.status.success());
+    let stderr = String::from_utf8_lossy(&res.stderr);
+    assert!(stderr.contains("duplicate sample ID") && stderr.contains("LD M4"), "{}", stderr);
+
     let _ = fs::remove_dir_all(&dir);
 }

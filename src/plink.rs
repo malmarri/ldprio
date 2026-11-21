@@ -20,6 +20,7 @@ impl Fam {
         let mut samples = Vec::new();
         let mut by_iid: HashMap<String, Vec<usize>> = HashMap::new();
         let mut by_pair: HashMap<(String, String), usize> = HashMap::new();
+        let mut dupes: Vec<String> = Vec::new();
 
         for line in reader.lines() {
             let line = line.map_err(|e| format!("ERROR: reading {}: {}", path.display(), e))?;
@@ -30,9 +31,20 @@ impl Fam {
             let idx = samples.len();
             let fid_s = fid.to_string();
             let iid_s = iid.to_string();
+            if by_pair.insert((fid_s.clone(), iid_s.clone()), idx).is_some() {
+                dupes.push(format!("{} {}", fid_s, iid_s));
+                continue;
+            }
             by_iid.entry(iid_s.clone()).or_default().push(idx);
-            by_pair.insert((fid_s.clone(), iid_s.clone()), idx);
             samples.push((fid_s, iid_s));
+        }
+        if !dupes.is_empty() {
+            return Err(format!(
+                "ERROR: {} duplicate sample ID(s) (same FID and IID) in {}: {}\n  Each FID/IID pair must be unique.",
+                dupes.len(),
+                path.display(),
+                preview_list(&dupes, 5)
+            ));
         }
         Ok(Self {
             samples,
@@ -146,15 +158,15 @@ pub struct Variant {
 #[derive(Debug)]
 pub struct Bim {
     pub n_input: usize,
-    pub variants: Vec<Variant>, // autosomes only (1..=22)
+    pub variants: Vec<Variant>, // autosomes only (1..=n_autosomes)
 }
 
-fn parse_autosome(chrom: &str) -> Option<u8> {
+fn parse_autosome(chrom: &str, n_autosomes: u8) -> Option<u8> {
     let lower = chrom.to_ascii_lowercase();
     let stripped = lower.strip_prefix("chr").unwrap_or(&lower);
     let trimmed = stripped.trim_start_matches('0');
     let num: u8 = trimmed.parse().ok()?;
-    if (1..=22).contains(&num) {
+    if (1..=n_autosomes).contains(&num) {
         Some(num)
     } else {
         None
@@ -177,8 +189,17 @@ fn is_transversion(a: &str, b: &str) -> bool {
     !matches!((ab, bb), (b'A', b'G') | (b'G', b'A') | (b'C', b'T') | (b'T', b'C'))
 }
 
+/// Default number of autosomes (human), as in PLINK.
+pub const DEFAULT_AUTOSOMES: u8 = 22;
+
 impl Bim {
+    /// Read a .bim keeping human autosomes (chromosomes 1-22).
     pub fn read(path: &Path) -> Result<Self, String> {
+        Self::read_autosomes(path, DEFAULT_AUTOSOMES)
+    }
+
+    /// Read a .bim keeping chromosomes `1..=n_autosomes` (PLINK `--autosome-num`).
+    pub fn read_autosomes(path: &Path, n_autosomes: u8) -> Result<Self, String> {
         let file = File::open(path)
             .map_err(|e| format!("ERROR: failed to open {}: {}", path.display(), e))?;
         let reader = BufReader::new(file);
@@ -198,7 +219,7 @@ impl Bim {
             let orig_idx = n_input;
             n_input += 1;
 
-            let Some(chrom) = parse_autosome(fields[0]) else {
+            let Some(chrom) = parse_autosome(fields[0], n_autosomes) else {
                 continue;
             };
             if fields.len() < 2 {
@@ -228,9 +249,10 @@ impl Bim {
         }
 
         if variants.is_empty() {
-            return Err(
-                "ERROR: input panel has no autosomal SNPs (chromosomes 1-22)".to_string(),
-            );
+            return Err(format!(
+                "ERROR: input panel has no autosomal SNPs (chromosomes 1-{})",
+                n_autosomes
+            ));
         }
         if !dupes.is_empty() {
             let preview = preview_list(&dupes, 5);
@@ -395,7 +417,7 @@ pub fn scan_bed(
         .metadata()
         .map_err(|e| format!("ERROR: stat {}: {}", bed_path.display(), e))?;
 
-    let bytes_per_snp = (n_fam + 3) / 4;
+    let bytes_per_snp = n_fam.div_ceil(4);
     let expected_len = 3u64 + (n_input as u64) * (bytes_per_snp as u64);
     if meta.len() != expected_len {
         return Err(format!(
@@ -422,7 +444,7 @@ pub fn scan_bed(
 
     let n_snps_in = variants.len();
     let n_prio = prio_indices.len();
-    let prio_words = (n_prio + 63) / 64;
+    let prio_words = n_prio.div_ceil(64);
     let mut prio_coverage = vec![0usize; n_prio];
     let mut prio_bits: Vec<u64> = Vec::with_capacity(n_snps_in * prio_words);
 
@@ -434,7 +456,7 @@ pub fn scan_bed(
         .collect();
 
     let n_ld = ld_indices.len();
-    let ld_words = (n_ld + 63) / 64;
+    let ld_words = n_ld.div_ceil(64);
     let mut ld_valid: Vec<u64> = Vec::with_capacity(n_snps_in * ld_words);
     let mut ld_het: Vec<u64> = Vec::with_capacity(n_snps_in * ld_words);
     let mut ld_hom2: Vec<u64> = Vec::with_capacity(n_snps_in * ld_words);
@@ -605,16 +627,13 @@ pub fn write_bed_subset(
         .write_all(&[0x6c, 0x1b, 0x01])
         .map_err(|e| format!("ERROR: writing {}: {}", out_bed, e))?;
 
-    let bytes_per_snp = (n_fam + 3) / 4;
+    let bytes_per_snp = n_fam.div_ceil(4);
     let mut row = vec![0u8; bytes_per_snp];
     let mut cur_orig: Option<usize> = None;
 
     for &k in kept_auto_indices {
         let target = variants[k].orig_idx;
-        let need_seek = match cur_orig {
-            Some(c) if c == target => false,
-            _ => true,
-        };
+        let need_seek = cur_orig != Some(target);
         if need_seek {
             let offset = 3u64 + (target as u64) * (bytes_per_snp as u64);
             reader
